@@ -26,7 +26,19 @@ export const INVENTORY_CATEGORIES = [
 ];
 
 /** User roles */
-export const ROLES = ['User', 'Purchasing', 'Store Keeper', 'General Manager', 'System Administrator'];
+export const ROLES = ['User', 'Purchasing', 'Storekeeper', 'General Manager', 'System Administrator'];
+
+/** Request / Order types */
+export const REQUEST_TYPES = {
+    REQUISITION: 'requisition',
+    PURCHASE: 'purchase'
+};
+
+/** Flow A: Department Requisition lifecycle statuses */
+export const REQUISITION_STATUSES = ['Pending', 'Approved', 'Partially Issued', 'Issued', 'Rejected'];
+
+/** Flow B: Purchase Order lifecycle statuses */
+export const PURCHASE_STATUSES = ['Pending', 'Approved', 'Ordered', 'Partially Received', 'Received', 'Rejected'];
 
 /** Measurement units for requested items */
 export const UNITS = ['Each', 'Box', 'Kg', 'Liter', 'Set'];
@@ -56,6 +68,9 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'General Manager': [
         'create_request', 'view_all_requests', 'approve_requests',
         'manage_budgets', 'view_reports'
+    ],
+    'Storekeeper': [
+        'manage_inventory', 'view_all_requests', 'create_request'
     ],
     'Store Keeper': [
         'manage_inventory', 'view_all_requests', 'create_request'

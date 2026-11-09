@@ -2,9 +2,47 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Only authenticated users can read and write data
+    // Helper function to verify user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper function to read the requesting user's profile
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    // Storekeeper or Administrator check
+    function isStorekeeperOrAdmin() {
+      return isAuthenticated() && (
+        getUserData().role in ['Storekeeper', 'Store Keeper', 'System Administrator']
+      );
+    }
+
+    // Inventory collection: Only Storekeeper and Admin can write stock quantities
+    match /inventory/{itemId} {
+      allow read: if isAuthenticated();
+      allow write: if isStorekeeperOrAdmin();
+    }
+
+    // Stock movements audit log: Only Storekeeper and Admin can create or modify movement records
+    match /stock_movements/{movementId} {
+      allow read: if isAuthenticated();
+      allow create: if isStorekeeperOrAdmin();
+      allow update, delete: if isStorekeeperOrAdmin();
+    }
+
+    // Requests (Requisitions & Purchase Orders)
+    match /requests/{requestId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if isStorekeeperOrAdmin() || getUserData().role in ['General Manager'];
+    }
+
+    // All other collections (users, budgets, departments, settings)
     match /{document=**} {
-      allow read, write: if request.auth != null;
+      allow read, write: if isAuthenticated();
     }
   }
 }

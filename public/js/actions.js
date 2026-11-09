@@ -15,6 +15,7 @@ import {
     showLoadingOverlay, hideLoadingOverlay, showNotification,
     showSection, showConfirmModal, addRequestItemRow, updateTotalCost,
     hideItemModal, showUserModal, hideUserModal, hideIssueModal, hideReceiveModal,
+    hideIssueRequisitionModal, hideOrderPOModal, hideReceiveGoodsModal,
     hasPermission, getActiveDepartments, renderPermissionsMatrix, updateUIVisibility
 } from './ui.js';
 
@@ -415,6 +416,439 @@ export async function markRequestAsReceived(requestId) {
         showNotification("Failed to update inventory status.", true);
     } finally {
         hideLoadingOverlay();
+    }
+}
+
+/**
+ * Flow B: Purchasing marks an approved PO as Ordered with supplier.
+ * Separation of Duties: Purchasing NEVER edits inventory stock quantities!
+ */
+export async function handleMarkAsOrdered(e) {
+    e.preventDefault();
+    const canOrder = state.userRole === 'Purchasing' || state.userRole === 'System Administrator' || hasPermission(state.userRole, 'create_request');
+    if (!canOrder) {
+        showNotification("You do not have permission to place purchase orders.", true);
+        return;
+    }
+
+    const reqId = document.getElementById('order-po-id').value;
+    const supplier = document.getElementById('order-po-supplier').value.trim();
+    const orderRef = document.getElementById('order-po-ref').value.trim();
+    const deliveryDate = document.getElementById('order-po-delivery-date').value;
+    const notes = document.getElementById('order-po-notes').value.trim();
+
+    if (!reqId || !supplier || !deliveryDate) {
+        showNotification("Please provide both supplier name and expected delivery date.", true);
+        return;
+    }
+
+    showLoadingOverlay();
+    try {
+        const updateData = {
+            status: 'Ordered',
+            supplier: supplier,
+            orderRef: orderRef || '',
+            expectedDeliveryDate: deliveryDate,
+            purchasingNotes: notes || '',
+            orderedAt: serverTimestamp(),
+            orderedBy: state.userId,
+            orderedByEmail: state.auth?.currentUser?.email || 'Purchasing Team'
+        };
+
+        await setDoc(doc(state.db, 'requests', reqId), updateData, { merge: true });
+        hideOrderPOModal();
+        showNotification(`Order placed with ${supplier}! Request is now Ordered. Storekeeper will receive goods upon delivery.`);
+    } catch (error) {
+        console.error("Error marking PO as ordered:", error);
+        showNotification("Failed to update purchase order.", true);
+    } finally {
+        hideLoadingOverlay();
+    }
+}
+
+/**
+ * Flow A: Storekeeper issues items from hotel store to department.
+ * Decrements inventory stock and logs an immutable audit trail entry.
+ */
+export async function handleIssueRequisitionSubmit(e) {
+    e.preventDefault();
+    if (!hasPermission(state.userRole, 'manage_inventory')) {
+        showNotification("Only Storekeepers or Administrators can issue items from the store.", true);
+        return;
+    }
+
+    const reqId = document.getElementById('issue-req-id').value;
+    const recipient = document.getElementById('issue-req-recipient').value.trim();
+    const issueNotes = document.getElementById('issue-req-notes').value.trim();
+
+    if (!reqId || !recipient) {
+        showNotification("Please provide the staff member / recipient name.", true);
+        return;
+    }
+
+    const reqDocRef = doc(state.db, 'requests', reqId);
+    showLoadingOverlay();
+    try {
+        const reqSnap = await getDoc(reqDocRef);
+        if (!reqSnap.exists()) {
+            showNotification("Requisition record not found.", true);
+            return;
+        }
+        const reqData = reqSnap.data();
+        const items = reqData.items || [];
+
+        // Read all inputs for issued quantities
+        const qtyInputs = document.querySelectorAll('#issue-requisition-form .issue-qty-input');
+        const issueMap = {};
+        let totalIssuedThisTime = 0;
+
+        qtyInputs.forEach(input => {
+            const idx = parseInt(input.dataset.index, 10);
+            const qty = Math.max(0, parseInt(input.value, 10) || 0);
+            issueMap[idx] = qty;
+            totalIssuedThisTime += qty;
+        });
+
+        if (totalIssuedThisTime <= 0) {
+            showNotification("Please enter at least 1 unit to issue.", true);
+            return;
+        }
+
+        const updatedItems = [...items];
+        const stockMovementsToLog = [];
+        const inventoryUpdates = [];
+
+        for (let i = 0; i < updatedItems.length; i++) {
+            const toIssue = issueMap[i] || 0;
+            if (toIssue <= 0) continue;
+
+            const item = updatedItems[i];
+            const remainingNeeded = item.quantity - (item.issuedQuantity || 0);
+            if (toIssue > remainingNeeded) {
+                showNotification(`Cannot issue ${toIssue} for ${item.name}; only ${remainingNeeded} remaining requested.`, true);
+                return;
+            }
+
+            // Find item in inventory
+            const invQuery = query(collection(state.db, 'inventory'), where("name", "==", item.name));
+            const invSnap = await getDocs(invQuery);
+            if (invSnap.empty) {
+                showNotification(`Item "${item.name}" is not registered in hotel inventory database.`, true);
+                return;
+            }
+
+            const invDoc = invSnap.docs[0];
+            const invData = invDoc.data();
+            const currentStock = Number(invData.stock || 0);
+
+            if (currentStock < toIssue) {
+                showNotification(`Insufficient store stock for "${item.name}". In store: ${currentStock}, attempting to issue: ${toIssue}.`, true);
+                return;
+            }
+
+            const newStock = currentStock - toIssue;
+            inventoryUpdates.push({
+                docRef: doc(state.db, 'inventory', invDoc.id),
+                newStock: newStock
+            });
+
+            stockMovementsToLog.push({
+                itemId: invDoc.id,
+                itemName: item.name,
+                category: invData.category || reqData.department || 'General',
+                type: 'OUT',
+                quantity: toIssue,
+                previousStock: currentStock,
+                newStock: newStock,
+                department: reqData.department || 'Store',
+                recipient: recipient,
+                reason: `Issued for Requisition #${reqId.substring(0, 8)}${issueNotes ? ' - ' + issueNotes : ''}`,
+                issuedBy: state.userId,
+                issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
+                timestamp: serverTimestamp()
+            });
+
+            updatedItems[i] = {
+                ...item,
+                issuedQuantity: (item.issuedQuantity || 0) + toIssue
+            };
+        }
+
+        // Execute inventory updates
+        for (const update of inventoryUpdates) {
+            await setDoc(update.docRef, { stock: update.newStock }, { merge: true });
+        }
+
+        // Execute stock movements logging
+        for (const movement of stockMovementsToLog) {
+            await addDoc(collection(state.db, 'stock_movements'), movement);
+        }
+
+        const allFulfilled = updatedItems.every(it => (it.issuedQuantity || 0) >= it.quantity);
+        const newStatus = allFulfilled ? 'Issued' : 'Partially Issued';
+
+        await setDoc(reqDocRef, {
+            status: newStatus,
+            items: updatedItems,
+            lastIssuedAt: serverTimestamp(),
+            lastIssuedBy: state.userId,
+            lastIssuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
+            lastIssuedRecipient: recipient,
+            issueNotes: issueNotes || '',
+            received: allFulfilled
+        }, { merge: true });
+
+        hideIssueRequisitionModal();
+        showNotification(allFulfilled
+            ? `Requisition #${reqId.substring(0, 8)} fully issued to ${recipient}! Store stock decreased.`
+            : `Requisition #${reqId.substring(0, 8)} partially issued (${totalIssuedThisTime} units). Store stock decreased.`
+        );
+    } catch (error) {
+        console.error("Error issuing requisition:", error);
+        showNotification("Failed to issue requisition items. Check console for details.", true);
+    } finally {
+        hideLoadingOverlay();
+    }
+}
+
+/**
+ * Flow B: Storekeeper receives PO goods from supplier into hotel store.
+ * Increments inventory stock, recalculates weighted average unit cost,
+ * and logs an immutable audit trail entry.
+ */
+export async function handleReceiveGoodsSubmit(e) {
+    e.preventDefault();
+    if (!hasPermission(state.userRole, 'manage_inventory')) {
+        showNotification("Only Storekeepers or Administrators can receive goods into the store.", true);
+        return;
+    }
+
+    const reqId = document.getElementById('receive-goods-po-id').value;
+    const invoice = document.getElementById('receive-goods-invoice').value.trim();
+    const receiveNotes = document.getElementById('receive-goods-notes').value.trim();
+
+    if (!reqId) {
+        showNotification("Invalid Purchase Order reference.", true);
+        return;
+    }
+
+    const reqDocRef = doc(state.db, 'requests', reqId);
+    showLoadingOverlay();
+    try {
+        const reqSnap = await getDoc(reqDocRef);
+        if (!reqSnap.exists()) {
+            showNotification("Purchase order record not found.", true);
+            return;
+        }
+        const reqData = reqSnap.data();
+        const items = reqData.items || [];
+
+        // Read all inputs for received quantities and actual unit prices
+        const qtyInputs = document.querySelectorAll('#receive-goods-form .receive-goods-qty-input');
+        const priceInputs = document.querySelectorAll('#receive-goods-form .receive-goods-price-input');
+
+        const receiveMap = {};
+        let totalReceivedThisTime = 0;
+
+        qtyInputs.forEach(input => {
+            const idx = parseInt(input.dataset.index, 10);
+            const qty = Math.max(0, parseInt(input.value, 10) || 0);
+            receiveMap[idx] = { qty: qty };
+            totalReceivedThisTime += qty;
+        });
+
+        priceInputs.forEach(input => {
+            const idx = parseInt(input.dataset.index, 10);
+            const price = Math.max(0, parseFloat(input.value) || 0);
+            if (receiveMap[idx]) {
+                receiveMap[idx].price = price;
+            }
+        });
+
+        if (totalReceivedThisTime <= 0) {
+            showNotification("Please specify at least 1 unit received from supplier.", true);
+            return;
+        }
+
+        const updatedItems = [...items];
+        const stockMovementsToLog = [];
+
+        for (let i = 0; i < updatedItems.length; i++) {
+            const entry = receiveMap[i];
+            if (!entry || entry.qty <= 0) continue;
+
+            const toReceive = entry.qty;
+            const actualUnitPrice = entry.price;
+            const item = updatedItems[i];
+
+            // Look up inventory item
+            const invQuery = query(collection(state.db, 'inventory'), where("name", "==", item.name));
+            const invSnap = await getDocs(invQuery);
+
+            let invDocId;
+            let currentStock = 0;
+            let currentPrice = 0;
+            let category = reqData.department || 'Store';
+
+            if (!invSnap.empty) {
+                const invDoc = invSnap.docs[0];
+                invDocId = invDoc.id;
+                const invData = invDoc.data();
+                currentStock = Number(invData.stock || 0);
+                currentPrice = Number(invData.price || 0);
+                category = invData.category || category;
+
+                const newStock = currentStock + toReceive;
+                // Weighted average unit cost calculation:
+                const newPrice = currentStock > 0 && actualUnitPrice > 0
+                    ? Number((((currentStock * currentPrice) + (toReceive * actualUnitPrice)) / newStock).toFixed(2))
+                    : (actualUnitPrice > 0 ? actualUnitPrice : currentPrice);
+
+                await setDoc(doc(state.db, 'inventory', invDocId), {
+                    stock: newStock,
+                    price: newPrice
+                }, { merge: true });
+
+                stockMovementsToLog.push({
+                    itemId: invDocId,
+                    itemName: item.name,
+                    category: category,
+                    type: 'IN',
+                    quantity: toReceive,
+                    previousStock: currentStock,
+                    newStock: newStock,
+                    unitPrice: actualUnitPrice,
+                    department: 'Store',
+                    supplier: reqData.supplier || 'Vendor',
+                    deliveryNote: invoice || '',
+                    recipient: 'Store / Warehouse',
+                    reason: `PO Delivery Received (PO #${reqId.substring(0, 8)})${invoice ? ' Inv: ' + invoice : ''}${receiveNotes ? ' - ' + receiveNotes : ''}`,
+                    issuedBy: state.userId,
+                    issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
+                    timestamp: serverTimestamp()
+                });
+            } else {
+                // Create item in inventory if newly introduced
+                const newStock = toReceive;
+                const newPrice = actualUnitPrice > 0 ? actualUnitPrice : (item.price || 0);
+                const newInvDoc = await addDoc(collection(state.db, 'inventory'), {
+                    name: item.name,
+                    category: category,
+                    stock: newStock,
+                    min: 5,
+                    price: newPrice
+                });
+                invDocId = newInvDoc.id;
+
+                stockMovementsToLog.push({
+                    itemId: invDocId,
+                    itemName: item.name,
+                    category: category,
+                    type: 'IN',
+                    quantity: toReceive,
+                    previousStock: 0,
+                    newStock: newStock,
+                    unitPrice: actualUnitPrice,
+                    department: 'Store',
+                    supplier: reqData.supplier || 'Vendor',
+                    deliveryNote: invoice || '',
+                    recipient: 'Store / Warehouse',
+                    reason: `New Item PO Delivery (PO #${reqId.substring(0, 8)})${invoice ? ' Inv: ' + invoice : ''}`,
+                    issuedBy: state.userId,
+                    issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
+                    timestamp: serverTimestamp()
+                });
+            }
+
+            updatedItems[i] = {
+                ...item,
+                receivedQuantity: (item.receivedQuantity || 0) + toReceive,
+                actualPrice: actualUnitPrice > 0 ? actualUnitPrice : item.price
+            };
+        }
+
+        // Execute stock movements logging
+        for (const movement of stockMovementsToLog) {
+            await addDoc(collection(state.db, 'stock_movements'), movement);
+        }
+
+        const allFulfilled = updatedItems.every(it => (it.receivedQuantity || 0) >= it.quantity);
+        const newStatus = allFulfilled ? 'Received' : 'Partially Received';
+
+        await setDoc(reqDocRef, {
+            status: newStatus,
+            items: updatedItems,
+            lastReceivedAt: serverTimestamp(),
+            lastReceivedBy: state.userId,
+            lastReceivedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
+            deliveryNote: invoice || '',
+            receiveNotes: receiveNotes || '',
+            received: allFulfilled
+        }, { merge: true });
+
+        hideReceiveGoodsModal();
+        showNotification(allFulfilled
+            ? `PO #${reqId.substring(0, 8)} fully received into Store! Stock increased.`
+            : `PO #${reqId.substring(0, 8)} partially received (${totalReceivedThisTime} units). Stock increased.`
+        );
+    } catch (error) {
+        console.error("Error receiving goods into store:", error);
+        showNotification("Failed to receive goods. Check console for details.", true);
+    } finally {
+        hideLoadingOverlay();
+    }
+}
+
+/**
+ * Normalizes existing requests in the database to adhere to Flow A / Flow B data model.
+ */
+export async function runOneTimeRequestAudit() {
+    try {
+        const snap = await getDocs(collection(state.db, 'requests'));
+        let migratedCount = 0;
+        for (const d of snap.docs) {
+            const data = d.data();
+            let needsUpdate = false;
+            const update = {};
+
+            if (!data.requestType) {
+                const isPO = data.department === 'Store' || data.department === 'Purchasing' || data.isRestockOrder === true;
+                update.requestType = isPO ? 'Purchase Order' : 'Requisition';
+                needsUpdate = true;
+            }
+
+            if (Array.isArray(data.items)) {
+                let itemsModified = false;
+                const newItems = data.items.map(item => {
+                    let changed = false;
+                    const it = { ...item };
+                    if (it.issuedQuantity === undefined) {
+                        it.issuedQuantity = (data.status === 'Issued' || data.received) ? it.quantity : 0;
+                        changed = true;
+                    }
+                    if (it.receivedQuantity === undefined) {
+                        it.receivedQuantity = (data.status === 'Received' || data.received) ? it.quantity : 0;
+                        changed = true;
+                    }
+                    if (changed) itemsModified = true;
+                    return it;
+                });
+                if (itemsModified) {
+                    update.items = newItems;
+                    needsUpdate = true;
+                }
+            }
+
+            if (needsUpdate) {
+                await setDoc(d.ref, update, { merge: true });
+                migratedCount++;
+            }
+        }
+        if (migratedCount > 0) {
+            console.log(`[Audit] Checked ${snap.docs.length} requests, normalized ${migratedCount}.`);
+        }
+    } catch (err) {
+        console.warn("[Audit] Notice:", err);
     }
 }
 

@@ -15,6 +15,9 @@ import {
     renderDashboard, renderInventory, renderMyRequests,
     applyReportFilters, showIssueModal, hideIssueModal,
     showReceiveModal, hideReceiveModal,
+    showIssueRequisitionModal, hideIssueRequisitionModal,
+    showOrderPOModal, hideOrderPOModal,
+    showReceiveGoodsModal, hideReceiveGoodsModal,
     showStockLogModal, hideStockLogModal,
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix
 } from './ui.js';
@@ -23,8 +26,10 @@ import {
     handleEditUser, handleSaveUserEdit, handleResetUserPassword, handleDeleteUser,
     handleRequestFormSubmit, updateRequestStatus, markRequestAsReceived,
     handleItemFormSubmit, deleteInventoryItem, handleIssueStock, handleReceiveStock,
+    handleMarkAsOrdered, handleIssueRequisitionSubmit, handleReceiveGoodsSubmit,
     handleSetBudget, downloadReportPdf, downloadReportCsv, handleQuickOrderLowStock,
-    handleAddDepartment, handleDeleteDepartment, handleSaveRolePermissions, handleResetRolePermissions
+    handleAddDepartment, handleDeleteDepartment, handleSaveRolePermissions, handleResetRolePermissions,
+    runOneTimeRequestAudit
 } from './actions.js';
 import { initializeFirebase } from './auth.js';
 
@@ -40,6 +45,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Populate department selects across the app
     refreshDepartmentSelects();
+
+    // Background normalization for Flow A / Flow B data model
+    runOneTimeRequestAudit();
 
     // --- Form Submissions ---
     document.getElementById('login-form').addEventListener('submit', handleLogin);
@@ -67,6 +75,12 @@ document.addEventListener('DOMContentLoaded', () => {
             handleIssueStock(e);
         } else if (e.target.id === 'receive-stock-form') {
             handleReceiveStock(e);
+        } else if (e.target.id === 'issue-requisition-form') {
+            handleIssueRequisitionSubmit(e);
+        } else if (e.target.id === 'order-po-form') {
+            handleMarkAsOrdered(e);
+        } else if (e.target.id === 'receive-goods-form') {
+            handleReceiveGoodsSubmit(e);
         }
     });
 
@@ -366,6 +380,49 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // Flow filter buttons (All, Dept Requisitions, Purchase Orders)
+        const flowBtn = e.target.closest('.flow-filter-btn');
+        if (flowBtn) {
+            const flow = flowBtn.dataset.flow;
+            state.requestFlowFilter = flow;
+            document.querySelectorAll('.flow-filter-btn').forEach(btn => {
+                if (btn.dataset.flow === flow) {
+                    btn.className = 'flow-filter-btn px-3 py-1.5 text-xs font-semibold rounded-md transition-colors bg-white dark:bg-gray-700 text-hotel-primary dark:text-white shadow-sm';
+                } else {
+                    btn.className = 'flow-filter-btn px-3 py-1.5 text-xs font-semibold rounded-md transition-colors text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white';
+                }
+            });
+            renderMyRequests(state.allRequestsCache);
+            return;
+        }
+
+        // Flow A: Issue Requisition (Storekeeper action)
+        const issueReqBtn = e.target.closest('.issue-req-btn');
+        if (issueReqBtn) {
+            const req = (state.allRequestsCache || []).find(r => r.id === issueReqBtn.dataset.id);
+            if (req) { showIssueRequisitionModal(req); }
+            else { showNotification("Requisition details not found.", true); }
+            return;
+        }
+
+        // Flow B: Place Purchase Order with Vendor (Purchasing action)
+        const orderPoBtn = e.target.closest('.order-po-btn');
+        if (orderPoBtn) {
+            const req = (state.allRequestsCache || []).find(r => r.id === orderPoBtn.dataset.id);
+            if (req) { showOrderPOModal(req); }
+            else { showNotification("Purchase order details not found.", true); }
+            return;
+        }
+
+        // Flow B: Receive PO Goods into Store (Storekeeper action)
+        const receivePoGoodsBtn = e.target.closest('.receive-po-goods-btn');
+        if (receivePoGoodsBtn) {
+            const req = (state.allRequestsCache || []).find(r => r.id === receivePoGoodsBtn.dataset.id);
+            if (req) { showReceiveGoodsModal(req); }
+            else { showNotification("Purchase order details not found.", true); }
+            return;
+        }
+
         // Close modals
         if (e.target.closest('#close-item-modal-btn') || e.target.closest('#cancel-item-modal-btn')) {
             hideItemModal();
@@ -377,6 +434,18 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (e.target.closest('#close-issue-modal-btn') || e.target.closest('#cancel-issue-modal-btn')) {
             hideIssueModal();
+            return;
+        }
+        if (e.target.closest('#close-issue-requisition-modal-btn') || e.target.closest('#cancel-issue-requisition-modal-btn')) {
+            hideIssueRequisitionModal();
+            return;
+        }
+        if (e.target.closest('#close-order-po-modal-btn') || e.target.closest('#cancel-order-po-modal-btn')) {
+            hideOrderPOModal();
+            return;
+        }
+        if (e.target.closest('#close-receive-goods-modal-btn') || e.target.closest('#cancel-receive-goods-modal-btn')) {
+            hideReceiveGoodsModal();
             return;
         }
         if (e.target.closest('#close-stock-log-btn') || e.target.closest('#close-stock-log-btn-bottom')) {

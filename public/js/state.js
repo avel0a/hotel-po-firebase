@@ -38,6 +38,9 @@ const state = {
     inventorySortColumn: 'name',
     inventorySortDirection: 'asc',
 
+    // Request filter state
+    requestFlowFilter: 'all', // 'all', 'requisition', 'purchase'
+
     // UI state
     confirmCallback: null,
     notificationTimeout: null,

@@ -42,12 +42,45 @@ export function showNotification(message, isError = false) {
 // ============================================================================
 
 export function getStatusBadge(status) {
-    const colors = {
-        Pending: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-700 dark:text-yellow-200',
-        Approved: 'bg-green-100 text-green-800 dark:bg-green-700 dark:text-green-200',
-        Rejected: 'bg-red-100 text-red-800 dark:bg-red-700 dark:text-red-200'
+    const badgeConfigs = {
+        'Pending': {
+            classes: 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-200 border border-amber-300 dark:border-amber-700',
+            icon: 'fa-clock'
+        },
+        'Approved': {
+            classes: 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-200 border border-blue-300 dark:border-blue-700',
+            icon: 'fa-check'
+        },
+        'Ordered': {
+            classes: 'bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-200 border border-purple-300 dark:border-purple-700',
+            icon: 'fa-truck'
+        },
+        'Partially Issued': {
+            classes: 'bg-orange-100 text-orange-800 dark:bg-orange-900/50 dark:text-orange-200 border border-orange-300 dark:border-orange-700',
+            icon: 'fa-boxes'
+        },
+        'Issued': {
+            classes: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200 border border-emerald-300 dark:border-emerald-700',
+            icon: 'fa-check-double'
+        },
+        'Partially Received': {
+            classes: 'bg-sky-100 text-sky-800 dark:bg-sky-900/50 dark:text-sky-200 border border-sky-300 dark:border-sky-700',
+            icon: 'fa-dolly-flatbed'
+        },
+        'Received': {
+            classes: 'bg-teal-100 text-teal-800 dark:bg-teal-900/50 dark:text-teal-200 border border-teal-300 dark:border-teal-700',
+            icon: 'fa-warehouse'
+        },
+        'Rejected': {
+            classes: 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-200 border border-red-300 dark:border-red-700',
+            icon: 'fa-times-circle'
+        }
     };
-    return `<span class="px-2 py-1 text-xs rounded-full ${colors[status] || 'bg-gray-100 text-gray-800'}">${status}</span>`;
+    const config = badgeConfigs[status] || {
+        classes: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600',
+        icon: 'fa-circle'
+    };
+    return `<span class="inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded-full ${config.classes}"><i class="fas ${config.icon} mr-1 text-[10px]"></i>${status}</span>`;
 }
 
 // ============================================================================
@@ -661,6 +694,445 @@ export function hideReceiveModal() {
 }
 
 // ============================================================================
+// Modals — Flow A: Issue Requisition (Stock Decreases)
+// ============================================================================
+
+export function showIssueRequisitionModal(req) {
+    const modal = document.getElementById('issue-requisition-modal');
+    if (!modal) return;
+
+    const inventoryMap = {};
+    (state.inventoryItemsCache || []).forEach(item => {
+        inventoryMap[item.name.toLowerCase().trim()] = item;
+    });
+
+    const itemsRowsHtml = (req.items || []).map((item, idx) => {
+        const invItem = inventoryMap[item.name.toLowerCase().trim()];
+        const currentStock = invItem ? Number(invItem.stock || 0) : 0;
+        const requestedQty = Number(item.quantity || 0);
+        const issuedQty = Number(item.issuedQuantity || 0);
+        const remainingQty = Math.max(0, requestedQty - issuedQty);
+        const maxIssuable = Math.min(remainingQty, currentStock);
+        const defaultIssue = maxIssuable;
+        const isStockLow = currentStock < remainingQty;
+
+        return `
+            <tr class="border-b border-gray-150 dark:border-gray-700/60 hover:bg-gray-50/50 dark:hover:bg-gray-755">
+                <td class="py-3 px-3">
+                    <div class="font-medium text-gray-900 dark:text-gray-100">${item.name}</div>
+                    <div class="text-xs text-gray-500 dark:text-gray-400">${item.unit || 'Units'}</div>
+                </td>
+                <td class="py-3 px-3 text-center font-semibold text-gray-700 dark:text-gray-300">
+                    ${requestedQty}
+                </td>
+                <td class="py-3 px-3 text-center text-xs text-gray-500 dark:text-gray-400">
+                    ${issuedQty}
+                </td>
+                <td class="py-3 px-3 text-center font-bold text-amber-600 dark:text-amber-400">
+                    ${remainingQty}
+                </td>
+                <td class="py-3 px-3 text-center">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${isStockLow ? 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300' : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'}">
+                        ${currentStock} in store
+                    </span>
+                    ${!invItem ? '<div class="text-[10px] text-red-500">Not in inventory</div>' : ''}
+                </td>
+                <td class="py-3 px-3 text-right">
+                    <input type="number"
+                        class="issue-qty-input w-24 p-1.5 text-sm font-bold border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-center focus:ring-emerald-500 focus:border-emerald-500"
+                        data-index="${idx}"
+                        data-max="${maxIssuable}"
+                        min="0"
+                        max="${maxIssuable}"
+                        value="${defaultIssue}"
+                        ${maxIssuable <= 0 ? 'disabled' : ''}>
+                </td>
+            </tr>
+        `;
+    }).join('');
+
+    modal.innerHTML = `
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-2xl transition-colors duration-300 overflow-hidden mx-4 max-h-[90vh] flex flex-col">
+            <div class="p-5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750">
+                <div>
+                    <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center">
+                        <i class="fas fa-hand-holding-box mr-2 text-blue-600"></i> Issue Requisition to Department
+                    </h3>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Dispense approved stock from store to department. Store stock will decrease.</p>
+                </div>
+                <button id="close-issue-requisition-modal-btn" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" aria-label="Close modal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <form id="issue-requisition-form" class="p-6 space-y-4 overflow-y-auto flex-1">
+                <input type="hidden" id="issue-req-id" value="${req.id}">
+
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-blue-50/60 dark:bg-blue-950/20 p-3.5 rounded-lg border border-blue-200/60 dark:border-blue-900/40 text-xs">
+                    <div>
+                        <span class="text-gray-500 dark:text-gray-400 block">Requisition #:</span>
+                        <span class="font-bold text-gray-800 dark:text-gray-200">#${req.id.substring(0, 8)}</span>
+                    </div>
+                    <div>
+                        <span class="text-gray-500 dark:text-gray-400 block">Department:</span>
+                        <span class="font-bold text-gray-800 dark:text-gray-200">${req.department}</span>
+                    </div>
+                    <div>
+                        <span class="text-gray-500 dark:text-gray-400 block">Requested By:</span>
+                        <span class="font-bold text-gray-800 dark:text-gray-200 truncate block" title="${req.createdByEmail || ''}">${req.createdByEmail || 'N/A'}</span>
+                    </div>
+                    <div>
+                        <span class="text-gray-500 dark:text-gray-400 block">Priority:</span>
+                        <span class="font-bold text-gray-800 dark:text-gray-200">${req.priority}</span>
+                    </div>
+                </div>
+
+                <div>
+                    <div class="flex justify-between items-center mb-2">
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">
+                            Requested Items & Quantities to Issue
+                        </label>
+                        <button type="button" id="issue-req-fill-max-btn" class="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 font-semibold underline">
+                            Issue All Available
+                        </button>
+                    </div>
+                    <div class="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+                        <table class="min-w-full text-sm">
+                            <thead class="bg-gray-50 dark:bg-gray-750 text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700">
+                                <tr>
+                                    <th class="py-2 px-3 text-left">Item</th>
+                                    <th class="py-2 px-3 text-center">Requested</th>
+                                    <th class="py-2 px-3 text-center">Issued</th>
+                                    <th class="py-2 px-3 text-center">Remaining</th>
+                                    <th class="py-2 px-3 text-center">In Store</th>
+                                    <th class="py-2 px-3 text-right">Issue Now</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-150 dark:divide-gray-700/60 bg-white dark:bg-gray-800">
+                                ${itemsRowsHtml}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                            Issued To (Staff Member Name) *
+                        </label>
+                        <input type="text" id="issue-req-recipient" placeholder="e.g. Abebe (Sous Chef), Kitchen staff" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500 transition-colors" required>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                            Issue Notes / Delivery Location
+                        </label>
+                        <input type="text" id="issue-req-notes" placeholder="e.g. Delivered directly to pastry pantry" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500 transition-colors">
+                    </div>
+                </div>
+
+                <div class="p-3 bg-amber-50 dark:bg-amber-950/30 rounded-lg border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-200 flex items-start space-x-2">
+                    <i class="fas fa-info-circle mt-0.5"></i>
+                    <div>
+                        <strong>Storekeeper Action:</strong> Confirming issuance decrements inventory store levels and logs an immutable Stock Movement audit entry. If quantities remain unfulfilled, the requisition stays open as <em>Partially Issued</em>.
+                    </div>
+                </div>
+
+                <div class="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                    <button type="button" id="cancel-issue-requisition-modal-btn" class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">Cancel</button>
+                    <button type="submit" class="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-md transition-colors shadow">Confirm Stock Issue</button>
+                </div>
+            </form>
+        </div>
+    `;
+
+    // Hook up Fill Max button
+    const fillMaxBtn = document.getElementById('issue-req-fill-max-btn');
+    if (fillMaxBtn) {
+        fillMaxBtn.addEventListener('click', () => {
+            modal.querySelectorAll('.issue-qty-input').forEach(input => {
+                input.value = input.dataset.max || 0;
+            });
+        });
+    }
+
+    modal.classList.remove('hidden', 'opacity-0', 'invisible');
+    document.getElementById('close-issue-requisition-modal-btn').addEventListener('click', hideIssueRequisitionModal);
+    document.getElementById('cancel-issue-requisition-modal-btn').addEventListener('click', hideIssueRequisitionModal);
+}
+
+export function hideIssueRequisitionModal() {
+    const modal = document.getElementById('issue-requisition-modal');
+    if (!modal) return;
+    modal.classList.add('opacity-0', 'invisible');
+    setTimeout(() => modal.classList.add('hidden'), 300);
+}
+
+// ============================================================================
+// Modals — Flow B: Mark PO as Ordered (Purchasing Action — NO stock edit)
+// ============================================================================
+
+export function showOrderPOModal(req) {
+    const modal = document.getElementById('order-po-modal');
+    if (!modal) return;
+
+    const itemsSummary = (req.items || []).map(i =>
+        `<li class="flex justify-between text-xs py-1 border-b border-gray-100 dark:border-gray-700">
+            <span class="font-medium text-gray-800 dark:text-gray-200">${i.name} (${i.quantity} ${i.unit || ''})</span>
+            <span class="text-gray-600 dark:text-gray-400">$${((i.price || 0) * (i.quantity || 1)).toFixed(2)}</span>
+        </li>`
+    ).join('');
+
+    const d = new Date();
+    d.setDate(d.getDate() + 3);
+    const defaultDateStr = d.toISOString().split('T')[0];
+
+    modal.innerHTML = `
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg transition-colors duration-300 overflow-hidden mx-4">
+            <div class="p-5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750">
+                <div>
+                    <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center">
+                        <i class="fas fa-shopping-cart mr-2 text-purple-600"></i> Place Purchase Order with Vendor
+                    </h3>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Purchasing team order commitment. Does NOT edit inventory stock.</p>
+                </div>
+                <button id="close-order-po-modal-btn" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" aria-label="Close modal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <form id="order-po-form" class="p-6 space-y-4">
+                <input type="hidden" id="order-po-id" value="${req.id}">
+
+                <div class="bg-purple-50/60 dark:bg-purple-950/20 p-3.5 rounded-lg border border-purple-200/60 dark:border-purple-900/40 text-xs">
+                    <div class="flex justify-between mb-1.5">
+                        <span class="font-semibold text-gray-700 dark:text-gray-300">Purchase Order: #${req.id.substring(0, 8)}</span>
+                        <span class="font-bold text-purple-700 dark:text-purple-300">Total: $${(req.totalCost || 0).toFixed(2)}</span>
+                    </div>
+                    <ul class="max-h-28 overflow-y-auto">
+                        ${itemsSummary}
+                    </ul>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                        Supplier / Vendor Name *
+                    </label>
+                    <input type="text" id="order-po-supplier" placeholder="e.g. Bole Wholesale Food Trading PLC, Ambassel..." value="${req.supplier || ''}" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-purple-500 focus:border-purple-500 transition-colors" required>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                            Supplier Order / Quote #
+                        </label>
+                        <input type="text" id="order-po-ref" placeholder="e.g. QT-2026-90" value="${req.orderRef || ''}" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-purple-500 focus:border-purple-500 transition-colors">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                            Expected Delivery Date *
+                        </label>
+                        <input type="date" id="order-po-delivery-date" value="${req.expectedDeliveryDate || defaultDateStr}" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-purple-500 focus:border-purple-500 transition-colors" required>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                        Purchasing Notes & Terms
+                    </label>
+                    <textarea id="order-po-notes" rows="2" placeholder="e.g. Net 30 payment, free delivery to hotel loading dock..." class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-purple-500 focus:border-purple-500 transition-colors">${req.purchasingNotes || ''}</textarea>
+                </div>
+
+                <div class="p-3 bg-purple-50 dark:bg-purple-950/30 rounded-lg border border-purple-200 dark:border-purple-800 text-xs text-purple-900 dark:text-purple-200 flex items-start space-x-2">
+                    <i class="fas fa-shield-alt mt-0.5"></i>
+                    <div>
+                        <strong>Purchasing Separation of Duty:</strong> Marking as <em>Ordered</em> commits the order to the vendor. Hotel inventory is <strong>NOT</strong> increased at this step. Only the Storekeeper adds stock when goods are physically received and inspected.
+                    </div>
+                </div>
+
+                <div class="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                    <button type="button" id="cancel-order-po-modal-btn" class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">Cancel</button>
+                    <button type="submit" class="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-semibold rounded-md transition-colors shadow">Mark as Ordered</button>
+                </div>
+            </form>
+        </div>
+    `;
+
+    modal.classList.remove('hidden', 'opacity-0', 'invisible');
+    document.getElementById('close-order-po-modal-btn').addEventListener('click', hideOrderPOModal);
+    document.getElementById('cancel-order-po-modal-btn').addEventListener('click', hideOrderPOModal);
+}
+
+export function hideOrderPOModal() {
+    const modal = document.getElementById('order-po-modal');
+    if (!modal) return;
+    modal.classList.add('opacity-0', 'invisible');
+    setTimeout(() => modal.classList.add('hidden'), 300);
+}
+
+// ============================================================================
+// Modals — Flow B: Receive PO Goods into Store (Storekeeper Action — Stock INCREASES)
+// ============================================================================
+
+export function showReceiveGoodsModal(req) {
+    const modal = document.getElementById('receive-goods-modal');
+    if (!modal) return;
+
+    const itemsRowsHtml = (req.items || []).map((item, idx) => {
+        const orderedQty = Number(item.quantity || 0);
+        const receivedQty = Number(item.receivedQuantity || 0);
+        const remainingQty = Math.max(0, orderedQty - receivedQty);
+        const currentPrice = Number(item.price || 0);
+
+        return `
+            <tr class="border-b border-gray-150 dark:border-gray-700/60 hover:bg-gray-50/50 dark:hover:bg-gray-755">
+                <td class="py-3 px-3">
+                    <div class="font-medium text-gray-900 dark:text-gray-100">${item.name}</div>
+                    <div class="text-xs text-gray-500 dark:text-gray-400">${item.unit || 'Units'}</div>
+                </td>
+                <td class="py-3 px-3 text-center font-semibold text-gray-700 dark:text-gray-300">
+                    ${orderedQty}
+                </td>
+                <td class="py-3 px-3 text-center text-xs text-gray-500 dark:text-gray-400">
+                    ${receivedQty}
+                </td>
+                <td class="py-3 px-3 text-center font-bold text-amber-600 dark:text-amber-400">
+                    ${remainingQty}
+                </td>
+                <td class="py-3 px-3 text-center">
+                    <input type="number"
+                        class="receive-goods-qty-input w-24 p-1.5 text-sm font-bold border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-center focus:ring-emerald-500 focus:border-emerald-500"
+                        data-index="${idx}"
+                        data-remaining="${remainingQty}"
+                        min="0"
+                        max="${remainingQty}"
+                        value="${remainingQty}">
+                </td>
+                <td class="py-3 px-3 text-right">
+                    <input type="number"
+                        step="0.01"
+                        class="receive-goods-price-input w-28 p-1.5 text-sm font-semibold border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-right focus:ring-emerald-500 focus:border-emerald-500"
+                        data-index="${idx}"
+                        min="0"
+                        value="${currentPrice.toFixed(2)}">
+                </td>
+            </tr>
+        `;
+    }).join('');
+
+    modal.innerHTML = `
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-2xl transition-colors duration-300 overflow-hidden mx-4 max-h-[90vh] flex flex-col">
+            <div class="p-5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750">
+                <div>
+                    <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center">
+                        <i class="fas fa-truck-loading mr-2 text-emerald-600"></i> Receive Goods into Store
+                    </h3>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Inspect vendor shipment and stock into hotel warehouse. Stock will INCREASE.</p>
+                </div>
+                <button id="close-receive-goods-modal-btn" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" aria-label="Close modal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <form id="receive-goods-form" class="p-6 space-y-4 overflow-y-auto flex-1">
+                <input type="hidden" id="receive-goods-po-id" value="${req.id}">
+
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-emerald-50/60 dark:bg-emerald-950/20 p-3.5 rounded-lg border border-emerald-200/60 dark:border-emerald-900/40 text-xs">
+                    <div>
+                        <span class="text-gray-500 dark:text-gray-400 block">Purchase Order:</span>
+                        <span class="font-bold text-gray-800 dark:text-gray-200">#${req.id.substring(0, 8)}</span>
+                    </div>
+                    <div>
+                        <span class="text-gray-500 dark:text-gray-400 block">Supplier:</span>
+                        <span class="font-bold text-gray-800 dark:text-gray-200 truncate block" title="${req.supplier || 'Vendor'}">${req.supplier || 'N/A'}</span>
+                    </div>
+                    <div>
+                        <span class="text-gray-500 dark:text-gray-400 block">Supplier Ref:</span>
+                        <span class="font-bold text-gray-800 dark:text-gray-200">${req.orderRef || 'N/A'}</span>
+                    </div>
+                    <div>
+                        <span class="text-gray-500 dark:text-gray-400 block">Expected Date:</span>
+                        <span class="font-bold text-gray-800 dark:text-gray-200">${req.expectedDeliveryDate || 'N/A'}</span>
+                    </div>
+                </div>
+
+                <div>
+                    <div class="flex justify-between items-center mb-2">
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">
+                            Shipment Line Items (Actual Delivered & Price)
+                        </label>
+                        <button type="button" id="receive-goods-fill-remaining-btn" class="text-xs text-emerald-600 hover:text-emerald-800 dark:text-emerald-400 font-semibold underline">
+                            Receive All Remaining
+                        </button>
+                    </div>
+                    <div class="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+                        <table class="min-w-full text-sm">
+                            <thead class="bg-gray-50 dark:bg-gray-750 text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700">
+                                <tr>
+                                    <th class="py-2 px-3 text-left">Item</th>
+                                    <th class="py-2 px-3 text-center">Ordered</th>
+                                    <th class="py-2 px-3 text-center">Received</th>
+                                    <th class="py-2 px-3 text-center">Remaining</th>
+                                    <th class="py-2 px-3 text-center">Qty Received</th>
+                                    <th class="py-2 px-3 text-right">Actual Price</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-150 dark:divide-gray-700/60 bg-white dark:bg-gray-800">
+                                ${itemsRowsHtml}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                            Delivery Note / Supplier Invoice #
+                        </label>
+                        <input type="text" id="receive-goods-invoice" placeholder="e.g. INV-9024 or DN-331" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                            Storekeeper Inspection / Storage Notes
+                        </label>
+                        <input type="text" id="receive-goods-notes" placeholder="e.g. Inspected, standard condition, placed on Shelf A" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors">
+                    </div>
+                </div>
+
+                <div class="p-3 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-900 dark:text-emerald-200 flex items-start space-x-2">
+                    <i class="fas fa-boxes mt-0.5"></i>
+                    <div>
+                        <strong>Storekeeper Action:</strong> Confirming receipt immediately increments store stock levels and recalculates the weighted average cost. If partial delivery, the PO remains open as <em>Partially Received</em>.
+                    </div>
+                </div>
+
+                <div class="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                    <button type="button" id="cancel-receive-goods-modal-btn" class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">Cancel</button>
+                    <button type="submit" class="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-md transition-colors shadow">Confirm Goods Receipt</button>
+                </div>
+            </form>
+        </div>
+    `;
+
+    // Hook up Fill Remaining button
+    const fillRemBtn = document.getElementById('receive-goods-fill-remaining-btn');
+    if (fillRemBtn) {
+        fillRemBtn.addEventListener('click', () => {
+            modal.querySelectorAll('.receive-goods-qty-input').forEach(input => {
+                input.value = input.dataset.remaining || 0;
+            });
+        });
+    }
+
+    modal.classList.remove('hidden', 'opacity-0', 'invisible');
+    document.getElementById('close-receive-goods-modal-btn').addEventListener('click', hideReceiveGoodsModal);
+    document.getElementById('cancel-receive-goods-modal-btn').addEventListener('click', hideReceiveGoodsModal);
+}
+
+export function hideReceiveGoodsModal() {
+    const modal = document.getElementById('receive-goods-modal');
+    if (!modal) return;
+    modal.classList.add('opacity-0', 'invisible');
+    setTimeout(() => modal.classList.add('hidden'), 300);
+}
+
+// ============================================================================
 // Modals — Stock Movements / Audit History
 // ============================================================================
 
@@ -810,35 +1282,143 @@ export function hideConfirmModal() {
 
 export function showRequestDetailsModal(req) {
     const modal = document.getElementById('request-details-modal');
+    const isPO = req.requestType === 'purchase' || req.requestType === 'Purchase Order' || req.department === 'Store' || req.department === 'Purchasing' || req.isRestockOrder === true;
+
+    const typeBadge = isPO
+        ? '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200 border border-emerald-300 dark:border-emerald-700"><i class="fas fa-truck-loading mr-1"></i>Purchase Order (Stock In)</span>'
+        : '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-200 border border-blue-300 dark:border-blue-700"><i class="fas fa-hand-holding-box mr-1"></i>Department Requisition (Stock Out)</span>';
+
+    const itemsRows = (req.items || []).map(i => {
+        const progressText = isPO
+            ? `Received: ${i.receivedQuantity || 0} / ${i.quantity}`
+            : `Issued: ${i.issuedQuantity || 0} / ${i.quantity}`;
+        return `
+            <tr class="border-b border-gray-150 dark:border-gray-700/60 text-xs">
+                <td class="py-2 px-3 font-medium text-gray-900 dark:text-gray-100">${i.name}</td>
+                <td class="py-2 px-3 text-center text-gray-700 dark:text-gray-300">${i.quantity} ${i.unit || ''}</td>
+                <td class="py-2 px-3 text-right text-gray-600 dark:text-gray-400">$${(i.price || 0).toFixed(2)}</td>
+                <td class="py-2 px-3 text-right font-semibold text-gray-800 dark:text-gray-200">$${((i.price || 0) * (i.quantity || 1)).toFixed(2)}</td>
+                <td class="py-2 px-3 text-center font-semibold text-slate-700 dark:text-slate-300">${progressText}</td>
+            </tr>
+        `;
+    }).join('');
+
+    let actionBtnHtml = '';
+    if (!isPO && (req.status === 'Approved' || req.status === 'Partially Issued') && hasPermission(state.userRole, 'manage_inventory')) {
+        actionBtnHtml = `<button type="button" class="modal-detail-action-issue-btn px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-semibold transition-colors shadow flex items-center" data-id="${req.id}"><i class="fas fa-hand-holding-box mr-1.5"></i>Issue Items</button>`;
+    } else if (isPO && req.status === 'Approved' && (state.userRole === 'Purchasing' || state.userRole === 'System Administrator' || hasPermission(state.userRole, 'create_request'))) {
+        actionBtnHtml = `<button type="button" class="modal-detail-action-order-btn px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded text-sm font-semibold transition-colors shadow flex items-center" data-id="${req.id}"><i class="fas fa-shopping-cart mr-1.5"></i>Place Order</button>`;
+    } else if (isPO && (req.status === 'Ordered' || req.status === 'Partially Received') && hasPermission(state.userRole, 'manage_inventory')) {
+        actionBtnHtml = `<button type="button" class="modal-detail-action-receive-btn px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-sm font-semibold transition-colors shadow flex items-center" data-id="${req.id}"><i class="fas fa-truck-loading mr-1.5"></i>Receive Goods into Store</button>`;
+    }
+
     modal.innerHTML = `
-        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-lg transition-colors duration-300 relative">
-            <div class="p-4 border-b flex justify-between items-center">
-                <h3 class="text-lg font-semibold">Request Details (ID: ${req.id.substring(0, 8)}...)</h3>
-                <button id="close-request-details-modal-btn" class="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors" aria-label="Close details modal"><i class="fas fa-times"></i></button>
-            </div>
-            <div class="p-4 space-y-3">
-                <div><span class="font-semibold">Requested By:</span> ${req.createdByEmail || 'N/A'}</div>
-                <div><span class="font-semibold">Department:</span> ${req.department}</div>
-                <div><span class="font-semibold">Priority:</span> ${req.priority}</div>
-                <div><span class="font-semibold">Required By Date:</span> ${req.requiredBy || 'N/A'}</div>
-                <div><span class="font-semibold">Status:</span> ${getStatusBadge(req.status)}</div>
-                <div><span class="font-semibold">Total Cost:</span> $${(req.totalCost || 0).toFixed(2)}</div>
-                <div><span class="font-semibold">Notes:</span> ${req.notes || 'None'}</div>
-                <div>
-                    <span class="font-semibold">Items:</span>
-                    <ul class="list-disc pl-5 mt-1">
-                        ${req.items.map(i => `<li>${i.name} - ${i.quantity} ${i.unit || ''} (@ $${(i.price || 0).toFixed(2)} each)</li>`).join('')}
-                    </ul>
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-2xl transition-colors duration-300 relative overflow-hidden mx-4 max-h-[90vh] flex flex-col">
+            <div class="p-5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750">
+                <div class="flex items-center space-x-2">
+                    <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100">Request #${req.id.substring(0, 8)}</h3>
+                    ${typeBadge}
                 </div>
-                ${req.approvalNotes ? `<div><span class="font-semibold">Approval Notes:</span> <span class="text-gray-700 dark:text-gray-300">${req.approvalNotes}</span></div>` : ''}
-                ${req.received ? `<div><span class="font-semibold text-green-600"><i class="fas fa-check-circle mr-1"></i>Received on: ${req.receivedAt?.toDate().toLocaleDateString() || 'N/A'}</span></div>` : ''}
-                ${req.status === 'Approved' && req.processedAt ? `<div><span class="font-semibold text-green-600">Approved on: ${req.processedAt?.toDate().toLocaleDateString() || 'N/A'}</span></div>` : ''}
-                ${req.status === 'Rejected' && req.processedAt ? `<div><span class="font-semibold text-red-600">Rejected on: ${req.processedAt?.toDate().toLocaleDateString() || 'N/A'}</span></div>` : ''}
+                <button id="close-request-details-modal-btn" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" aria-label="Close details modal"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="p-6 space-y-4 overflow-y-auto flex-1">
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-gray-50 dark:bg-gray-750 p-3.5 rounded-lg border border-gray-200 dark:border-gray-700 text-xs">
+                    <div>
+                        <span class="text-gray-500 dark:text-gray-400 block">Department</span>
+                        <span class="font-bold text-gray-900 dark:text-gray-100">${req.department}</span>
+                    </div>
+                    <div>
+                        <span class="text-gray-500 dark:text-gray-400 block">Status</span>
+                        <div class="mt-0.5">${getStatusBadge(req.status)}</div>
+                    </div>
+                    <div>
+                        <span class="text-gray-500 dark:text-gray-400 block">Priority</span>
+                        <span class="font-bold text-gray-900 dark:text-gray-100">${req.priority}</span>
+                    </div>
+                    <div>
+                        <span class="text-gray-500 dark:text-gray-400 block">Total Estimated</span>
+                        <span class="font-extrabold text-gray-900 dark:text-gray-100">$${(req.totalCost || 0).toFixed(2)}</span>
+                    </div>
+                </div>
+
+                <div class="text-xs space-y-1 text-gray-600 dark:text-gray-300">
+                    <div><span class="font-semibold text-gray-800 dark:text-gray-200">Requested By:</span> ${req.createdByEmail || 'N/A'}</div>
+                    <div><span class="font-semibold text-gray-800 dark:text-gray-200">Required By Date:</span> ${req.requiredBy || 'N/A'}</div>
+                    ${req.createdAt?.toDate ? `<div><span class="font-semibold text-gray-800 dark:text-gray-200">Created:</span> ${req.createdAt.toDate().toLocaleString()}</div>` : ''}
+                    <div><span class="font-semibold text-gray-800 dark:text-gray-200">Notes:</span> ${req.notes || 'None'}</div>
+                </div>
+
+                ${isPO && (req.supplier || req.expectedDeliveryDate) ? `
+                    <div class="bg-purple-50/70 dark:bg-purple-950/20 p-3 rounded-lg border border-purple-200/60 dark:border-purple-900/40 text-xs space-y-1">
+                        <div class="font-bold text-purple-900 dark:text-purple-300">Vendor Purchase Details:</div>
+                        <div><span class="font-semibold">Supplier:</span> ${req.supplier || 'N/A'}</div>
+                        <div><span class="font-semibold">Order / Quote Ref:</span> ${req.orderRef || 'N/A'}</div>
+                        <div><span class="font-semibold">Expected Delivery:</span> ${req.expectedDeliveryDate || 'N/A'}</div>
+                        ${req.purchasingNotes ? `<div><span class="font-semibold">Purchasing Notes:</span> ${req.purchasingNotes}</div>` : ''}
+                    </div>
+                ` : ''}
+
+                ${req.approvalNotes ? `
+                    <div class="bg-blue-50/70 dark:bg-blue-950/20 p-3 rounded-lg border border-blue-200/60 dark:border-blue-900/40 text-xs">
+                        <span class="font-bold text-blue-900 dark:text-blue-300">GM Approval Notes:</span>
+                        <p class="text-gray-700 dark:text-gray-300 mt-0.5">${req.approvalNotes}</p>
+                    </div>
+                ` : ''}
+
+                <div>
+                    <h4 class="text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-2">Item Breakdown</h4>
+                    <div class="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+                        <table class="min-w-full text-xs">
+                            <thead class="bg-gray-50 dark:bg-gray-750 text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700">
+                                <tr>
+                                    <th class="py-2 px-3 text-left">Item</th>
+                                    <th class="py-2 px-3 text-center">Qty</th>
+                                    <th class="py-2 px-3 text-right">Unit Price</th>
+                                    <th class="py-2 px-3 text-right">Total</th>
+                                    <th class="py-2 px-3 text-center">Fulfillment</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-150 dark:divide-gray-700/60 bg-white dark:bg-gray-800">
+                                ${itemsRows}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-750 flex justify-between items-center">
+                <button type="button" id="footer-close-details-btn" class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">Close</button>
+                ${actionBtnHtml}
             </div>
         </div>
     `;
+
     modal.classList.remove('hidden', 'opacity-0', 'invisible');
     document.getElementById('close-request-details-modal-btn').addEventListener('click', hideRequestDetailsModal);
+    const footerClose = document.getElementById('footer-close-details-btn');
+    if (footerClose) footerClose.addEventListener('click', hideRequestDetailsModal);
+
+    // Contextual button listeners inside details modal
+    const issueBtn = modal.querySelector('.modal-detail-action-issue-btn');
+    if (issueBtn) {
+        issueBtn.addEventListener('click', () => {
+            hideRequestDetailsModal();
+            showIssueRequisitionModal(req);
+        });
+    }
+    const orderBtn = modal.querySelector('.modal-detail-action-order-btn');
+    if (orderBtn) {
+        orderBtn.addEventListener('click', () => {
+            hideRequestDetailsModal();
+            showOrderPOModal(req);
+        });
+    }
+    const recvBtn = modal.querySelector('.modal-detail-action-receive-btn');
+    if (recvBtn) {
+        recvBtn.addEventListener('click', () => {
+            hideRequestDetailsModal();
+            showReceiveGoodsModal(req);
+        });
+    }
 }
 
 export function hideRequestDetailsModal() {
@@ -1052,21 +1632,47 @@ export function renderMyRequests(requests, searchTerm = '') {
     const emptyState = document.getElementById('my-requests-empty');
     if (!tableBody || !emptyState) return;
 
-    let displayRequests = requests;
-    if (hasPermission(state.userRole, 'view_all_requests')) {
-        displayRequests = state.allRequestsCache;
-    } else {
-        displayRequests = state.allRequestsCache.filter(r => r.createdBy === state.userId);
+    let baseRequests = requests || state.allRequestsCache || [];
+    if (!hasPermission(state.userRole, 'view_all_requests')) {
+        baseRequests = baseRequests.filter(r => r.createdBy === state.userId);
+    }
+
+    const isPO = (req) => {
+        if (req.requestType === 'purchase' || req.requestType === 'Purchase Order') return true;
+        if (req.requestType === 'requisition' || req.requestType === 'Requisition') return false;
+        return req.department === 'Store' || req.department === 'Purchasing' || req.isRestockOrder === true;
+    };
+
+    // Update filter counts
+    const allCount = baseRequests.length;
+    const reqCount = baseRequests.filter(r => !isPO(r)).length;
+    const poCount = baseRequests.filter(r => isPO(r)).length;
+
+    const allCountEl = document.getElementById('count-all-requests');
+    const reqCountEl = document.getElementById('count-req-requests');
+    const poCountEl = document.getElementById('count-po-requests');
+    if (allCountEl) allCountEl.textContent = allCount;
+    if (reqCountEl) reqCountEl.textContent = reqCount;
+    if (poCountEl) poCountEl.textContent = poCount;
+
+    // Filter by active flow
+    let displayRequests = baseRequests;
+    if (state.requestFlowFilter === 'requisition') {
+        displayRequests = displayRequests.filter(r => !isPO(r));
+    } else if (state.requestFlowFilter === 'purchase') {
+        displayRequests = displayRequests.filter(r => isPO(r));
     }
 
     if (searchTerm) {
         const lc = searchTerm.toLowerCase();
         displayRequests = displayRequests.filter(req =>
-            req.department.toLowerCase().includes(lc) ||
-            req.items.some(item => item.name.toLowerCase().includes(lc)) ||
-            req.status.toLowerCase().includes(lc) ||
-            req.priority.toLowerCase().includes(lc) ||
+            (req.department && req.department.toLowerCase().includes(lc)) ||
+            (req.items && req.items.some(item => item.name && item.name.toLowerCase().includes(lc))) ||
+            (req.status && req.status.toLowerCase().includes(lc)) ||
+            (req.priority && req.priority.toLowerCase().includes(lc)) ||
             (req.requestType && req.requestType.toLowerCase().includes(lc)) ||
+            (req.supplier && req.supplier.toLowerCase().includes(lc)) ||
+            (req.orderRef && req.orderRef.toLowerCase().includes(lc)) ||
             (req.createdByEmail && req.createdByEmail.toLowerCase().includes(lc))
         );
     }
@@ -1077,48 +1683,78 @@ export function renderMyRequests(requests, searchTerm = '') {
     } else {
         emptyState.classList.add('hidden');
         tableBody.innerHTML = displayRequests.map(req => {
-            let receivedCell = '';
-            const isRestockPO = req.requestType === 'Purchase Order' || req.department === 'Store' || req.isRestockOrder === true;
+            const po = isPO(req);
+            const typeBadge = po
+                ? '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200 border border-emerald-300 dark:border-emerald-700" title="Vendor Purchase Order (Stock In)"><i class="fas fa-truck-loading mr-1"></i>Purchase</span>'
+                : '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-200 border border-blue-300 dark:border-blue-700" title="Department Requisition (Stock Out)"><i class="fas fa-hand-holding-box mr-1"></i>Requisition</span>';
 
-            const typeBadge = isRestockPO
-                ? '<span class="text-[10px] uppercase font-bold px-1.5 py-0.5 bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-200 rounded ml-1.5" title="Vendor Purchase Order to replenish Store">PO (Restock)</span>'
-                : '<span class="text-[10px] uppercase font-bold px-1.5 py-0.5 bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-200 rounded ml-1.5" title="Department Requisition from Store">Requisition</span>';
+            const itemsSummary = req.items && req.items.length > 0
+                ? `${req.items.map(i => `${i.quantity}x ${i.name}`).slice(0, 2).join(', ')}${req.items.length > 2 ? ` (+${req.items.length - 2})` : ''}`
+                : 'No items';
 
-            if (req.status === 'Approved' && !req.received) {
-                if (isRestockPO) {
-                    // Purchase Order: Storekeeper or Admin receives delivery into warehouse
-                    if (hasPermission(state.userRole, 'manage_inventory') || req.createdBy === state.userId) {
-                        receivedCell = `<button class="mark-received-btn px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs transition-colors inline-flex items-center shadow-sm" data-id="${req.id}" title="Receive vendor shipment into store (increases stock)"><i class="fas fa-arrow-circle-down mr-1"></i> Receive into Store</button>`;
+            const viewBtn = `<button class="view-request-btn px-2.5 py-1 bg-hotel-accent hover:bg-blue-600 text-white rounded text-xs transition-colors inline-flex items-center shadow-sm mr-1.5" data-id="${req.id}"><i class="fas fa-eye mr-1"></i>View</button>`;
+
+            let contextualAction = '';
+            if (!po) {
+                // Flow A: Requisition
+                if ((req.status === 'Approved' || req.status === 'Partially Issued')) {
+                    if (hasPermission(state.userRole, 'manage_inventory')) {
+                        contextualAction = `<button class="issue-req-btn px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs transition-colors inline-flex items-center shadow-sm" data-id="${req.id}" title="Issue items to department (decreases store stock)"><i class="fas fa-hand-holding-box mr-1"></i>Issue Items</button>`;
                     } else {
-                        receivedCell = `<span class="px-2 py-0.5 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/40 rounded border border-amber-200 dark:border-amber-700">Awaiting Store Receipt</span>`;
+                        contextualAction = `<span class="text-xs text-amber-700 dark:text-amber-400 italic">Awaiting Storekeeper</span>`;
                     }
-                } else {
-                    // Department Requisition: Requester or Storekeeper confirms delivery to department (decreases store stock)
-                    if (req.createdBy === state.userId || hasPermission(state.userRole, 'manage_inventory')) {
-                        receivedCell = `<button class="mark-received-btn px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs transition-colors inline-flex items-center shadow-sm" data-id="${req.id}" title="Confirm receipt of items (dispensed from store stock)"><i class="fas fa-check mr-1"></i> Confirm Received</button>`;
-                    } else {
-                        receivedCell = `<span class="px-2 py-0.5 text-xs text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/40 rounded">Pending Dispense</span>`;
-                    }
+                } else if (req.status === 'Issued') {
+                    contextualAction = `<span class="text-xs font-semibold text-emerald-600 dark:text-emerald-400 inline-flex items-center"><i class="fas fa-check-double mr-1"></i>Issued</span>`;
                 }
-            } else if (req.received) {
-                if (isRestockPO) {
-                    receivedCell = '<span class="px-2 py-1 text-xs rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-200 inline-flex items-center font-medium"><i class="fas fa-warehouse mr-1"></i>Stocked In</span>';
-                } else {
-                    receivedCell = '<span class="px-2 py-1 text-xs rounded-full bg-green-100 text-green-800 dark:bg-green-900/60 dark:text-green-200 inline-flex items-center font-medium"><i class="fas fa-check mr-1"></i>Received</span>';
+            } else {
+                // Flow B: Purchase Order
+                if (req.status === 'Approved') {
+                    if (state.userRole === 'Purchasing' || state.userRole === 'System Administrator' || hasPermission(state.userRole, 'create_request')) {
+                        contextualAction = `<button class="order-po-btn px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded text-xs transition-colors inline-flex items-center shadow-sm" data-id="${req.id}" title="Place order with vendor"><i class="fas fa-shopping-cart mr-1"></i>Place Order</button>`;
+                    } else {
+                        contextualAction = `<span class="text-xs text-purple-700 dark:text-purple-400 italic">Awaiting Purchasing</span>`;
+                    }
+                } else if (req.status === 'Ordered' || req.status === 'Partially Received') {
+                    if (hasPermission(state.userRole, 'manage_inventory')) {
+                        contextualAction = `<button class="receive-po-goods-btn px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs transition-colors inline-flex items-center shadow-sm" data-id="${req.id}" title="Receive goods into store (increases stock)"><i class="fas fa-truck-loading mr-1"></i>Receive Goods</button>`;
+                    } else {
+                        contextualAction = `<span class="text-xs text-blue-700 dark:text-blue-400 italic">Awaiting Store Goods</span>`;
+                    }
+                } else if (req.status === 'Received') {
+                    contextualAction = `<span class="text-xs font-semibold text-teal-600 dark:text-teal-400 inline-flex items-center"><i class="fas fa-warehouse mr-1"></i>Stocked In</span>`;
                 }
             }
 
-            const viewBtn = `<button class="view-request-btn px-3 py-1 bg-hotel-accent text-white rounded hover:bg-blue-600 text-xs transition-colors mr-2" data-id="${req.id}">View Details</button>`;
             return `
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 dark:text-gray-300">${req.createdAt?.toDate ? req.createdAt.toDate().toLocaleDateString() : 'N/A'}</td>
-                    <td class="px-6 py-4 whitespace-nowrap font-medium text-gray-900 dark:text-gray-100">
-                        ${req.department} ${typeBadge}
+                    <td class="px-4 py-3 whitespace-nowrap text-xs text-gray-600 dark:text-gray-300">
+                        ${req.createdAt?.toDate ? req.createdAt.toDate().toLocaleDateString() : 'N/A'}
                     </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300 font-semibold">$${(req.totalCost || 0).toFixed(2)}</td>
-                    <td class="px-6 py-4 whitespace-nowrap">${req.priority}</td>
-                    <td class="px-6 py-4 whitespace-nowrap">${getStatusBadge(req.status)}</td>
-                    <td class="px-6 py-4 whitespace-nowrap">${viewBtn}${receivedCell}</td>
+                    <td class="px-4 py-3 whitespace-nowrap">
+                        ${typeBadge}
+                    </td>
+                    <td class="px-4 py-3 whitespace-nowrap">
+                        <div class="font-medium text-gray-900 dark:text-gray-100">${req.department}</div>
+                        <div class="text-[11px] text-gray-500 dark:text-gray-400 truncate max-w-[140px]" title="${req.createdByEmail || ''}">${req.createdByEmail || ''}</div>
+                    </td>
+                    <td class="px-4 py-3 text-xs text-gray-700 dark:text-gray-300 max-w-[180px] truncate" title="${itemsSummary}">
+                        ${itemsSummary}
+                    </td>
+                    <td class="px-4 py-3 whitespace-nowrap text-xs font-bold text-gray-900 dark:text-gray-100">
+                        $${(req.totalCost || 0).toFixed(2)}
+                    </td>
+                    <td class="px-4 py-3 whitespace-nowrap text-xs">
+                        <span class="font-semibold text-gray-700 dark:text-gray-300">${req.priority}</span>
+                    </td>
+                    <td class="px-4 py-3 whitespace-nowrap">
+                        ${getStatusBadge(req.status)}
+                    </td>
+                    <td class="px-4 py-3 whitespace-nowrap text-xs">
+                        <div class="flex items-center">
+                            ${viewBtn}
+                            ${contextualAction}
+                        </div>
+                    </td>
                 </tr>
             `;
         }).join('');
@@ -1141,36 +1777,46 @@ export function renderApprovals(requests) {
     } else {
         emptyState.classList.add('hidden');
         container.innerHTML = pending.map(req => {
-            const itemsList = req.items.map(i => `<li>${i.name} - ${i.quantity} ${i.unit}</li>`).join('');
-            const requestedByEmail = state.allUsersCache.find(u => u.id === req.createdBy)?.email || 'N/A';
+            const isPO = req.requestType === 'purchase' || req.requestType === 'Purchase Order' || req.department === 'Store' || req.department === 'Purchasing' || req.isRestockOrder === true;
+
+            const typeBanner = isPO
+                ? '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-200 border border-emerald-300 dark:border-emerald-700"><i class="fas fa-truck-loading mr-1"></i>Purchase Order (Vendor Stock In)</span>'
+                : '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-200 border border-blue-300 dark:border-blue-700"><i class="fas fa-hand-holding-box mr-1"></i>Dept Requisition (Store Stock Out)</span>';
+
+            const itemsList = (req.items || []).map(i => `<li>${i.name} - ${i.quantity} ${i.unit || ''} (@ $${(i.price || 0).toFixed(2)})</li>`).join('');
+            const requestedByEmail = state.allUsersCache.find(u => u.id === req.createdBy)?.email || req.createdByEmail || 'N/A';
             return `
                 <div class="approval-card border rounded-lg overflow-hidden bg-white dark:bg-gray-800 hover:shadow-md transition-shadow duration-200">
-                    <div class="bg-gray-50 dark:bg-gray-700 px-4 py-3 flex justify-between items-center">
-                        <div>
-                            <span class="font-medium text-gray-800 dark:text-gray-200">${req.department}</span>
-                            <span class="text-sm text-gray-500 dark:text-gray-400 ml-4">Requested by: ${requestedByEmail}</span>
-                            <span class="text-sm text-gray-500 dark:text-gray-400 ml-4">Required by: ${req.requiredBy}</span>
+                    <div class="bg-gray-50 dark:bg-gray-750 px-4 py-3 flex flex-wrap justify-between items-center gap-2 border-b border-gray-200 dark:border-gray-700">
+                        <div class="flex items-center space-x-3">
+                            <span class="font-bold text-gray-900 dark:text-gray-100">${req.department}</span>
+                            ${typeBanner}
                         </div>
-                        <div><span class="px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-800 dark:bg-blue-700 dark:text-blue-200">${req.priority} Priority</span></div>
+                        <div class="flex items-center space-x-2 text-xs text-gray-500 dark:text-gray-400">
+                            <span>Requested by: <strong class="text-gray-700 dark:text-gray-300">${requestedByEmail}</strong></span>
+                            <span>•</span>
+                            <span>Required: <strong class="text-gray-700 dark:text-gray-300">${req.requiredBy || 'N/A'}</strong></span>
+                            <span>•</span>
+                            <span class="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800 dark:bg-blue-700 dark:text-blue-200 font-semibold">${req.priority}</span>
+                        </div>
                     </div>
                     <div class="p-4">
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <div>
-                                <h4 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Items Requested</h4>
-                                <ul class="list-disc pl-5 text-sm text-gray-700 dark:text-gray-300">${itemsList}</ul>
-                                <p class="font-semibold mt-2">Total: $${(req.totalCost || 0).toFixed(2)}</p>
+                                <h4 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Items Requested</h4>
+                                <ul class="list-disc pl-5 text-sm text-gray-700 dark:text-gray-300 space-y-0.5">${itemsList}</ul>
+                                <p class="font-extrabold text-sm text-gray-900 dark:text-gray-100 mt-2">Total Estimated: $${(req.totalCost || 0).toFixed(2)}</p>
                             </div>
                             <div>
-                                <h4 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Notes</h4>
-                                <p class="text-sm text-gray-700 dark:text-gray-300">${req.notes || 'None'}</p>
+                                <h4 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Notes & Justification</h4>
+                                <p class="text-sm text-gray-700 dark:text-gray-300 italic">${req.notes || 'No notes provided.'}</p>
                             </div>
                             <div>
-                                <h4 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Approval Notes</h4>
-                                <textarea data-id="${req.id}" class="approval-notes-input w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 resize-none mb-2" rows="2" placeholder="Optional notes (e.g. reason for approval/rejection)..."></textarea>
-                                <h4 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Actions</h4>
-                                <div class="flex space-x-2 mt-2">
-                                    <button data-id="${req.id}" class="approve-btn flex-1 px-3 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 text-sm transition-colors">Approve</button>
-                                    <button data-id="${req.id}" class="reject-btn flex-1 px-3 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 text-sm transition-colors">Reject</button>
+                                <h4 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">General Manager Decision</h4>
+                                <textarea data-id="${req.id}" class="approval-notes-input w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 resize-none mb-2" rows="2" placeholder="Optional approval / rejection instructions..."></textarea>
+                                <div class="flex space-x-2">
+                                    <button data-id="${req.id}" class="approve-btn flex-1 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-md text-sm font-semibold transition-colors shadow-sm"><i class="fas fa-check mr-1"></i>Approve</button>
+                                    <button data-id="${req.id}" class="reject-btn flex-1 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md text-sm font-semibold transition-colors shadow-sm"><i class="fas fa-times mr-1"></i>Reject</button>
                                 </div>
                             </div>
                         </div>
