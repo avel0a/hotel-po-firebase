@@ -61,6 +61,11 @@ async function loadUserProfile(user) {
     const userDoc = await getDoc(userRef);
     if (userDoc.exists()) {
         const userData = userDoc.data();
+        if (userData.status === 'Suspended') {
+            showNotification("Your account has been suspended. Please contact the administrator.", true);
+            await signOut(state.auth);
+            return;
+        }
         state.userRole = userData.role;
         state.userDepartment = userData.department;
         document.getElementById('user-email-display').textContent = user.email;
@@ -136,7 +141,10 @@ function attachFirestoreListeners() {
     if (state.userRole === 'System Administrator' || state.userRole === 'General Manager' || state.userRole === 'Purchasing') {
         const usersUnsub = onSnapshot(collection(state.db, 'users'), (snapshot) => {
             state.allUsersCache = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-            if (state.userRole === 'System Administrator') renderUsersTable(state.allUsersCache);
+            if (state.userRole === 'System Administrator') {
+                const searchVal = document.getElementById('users-search')?.value || '';
+                renderUsersTable(state.allUsersCache, searchVal);
+            }
             populateReportFilters(state.allUsersCache);
         }, error => console.error("Error listening to users:", error));
         state.unsubscribers.push(usersUnsub);

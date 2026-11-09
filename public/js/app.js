@@ -11,11 +11,13 @@ import {
     addRequestItemRow, updateTotalCost, updateItemSubtotal,
     populateItemNameDatalist, showItemModal, hideItemModal,
     hideRequestDetailsModal, showRequestDetailsModal,
+    showUserModal, hideUserModal, renderUsersTable,
     renderDashboard, renderInventory, renderMyRequests,
     applyReportFilters
 } from './ui.js';
 import {
     handleLogin, handleLogout, handleCreateUser,
+    handleEditUser, handleSaveUserEdit, handleResetUserPassword, handleDeleteUser,
     handleRequestFormSubmit, updateRequestStatus, markRequestAsReceived,
     handleItemFormSubmit, deleteInventoryItem,
     handleSetBudget, downloadReportPdf
@@ -44,10 +46,12 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('purchase-request-form').addEventListener('submit', handleRequestFormSubmit);
     document.getElementById('set-budget-btn').addEventListener('click', handleSetBudget);
 
-    // Item form submit (dynamic — handled via event delegation)
+    // Modal form submits (dynamic — handled via event delegation)
     document.addEventListener('submit', (e) => {
         if (e.target.id === 'item-form') {
             handleItemFormSubmit(e);
+        } else if (e.target.id === 'edit-user-form') {
+            handleSaveUserEdit(e);
         }
     });
 
@@ -95,6 +99,35 @@ document.addEventListener('DOMContentLoaded', () => {
         renderDashboard(state.allRequestsCache);
     });
 
+    // --- Department Override Controls (Admin / GM) ---
+    const overrideCheck = document.getElementById('req-dept-override-check');
+    const overrideSelect = document.getElementById('req-department-override');
+    const selectWrapper = document.getElementById('req-dept-select-wrapper');
+    const reqDeptHidden = document.getElementById('req-department');
+    const reqDeptDisplay = document.getElementById('req-dept-display');
+
+    if (overrideCheck && overrideSelect) {
+        overrideCheck.addEventListener('change', () => {
+            if (overrideCheck.checked) {
+                if (selectWrapper) selectWrapper.classList.remove('hidden');
+                if (reqDeptHidden) reqDeptHidden.value = overrideSelect.value;
+                if (reqDeptDisplay) reqDeptDisplay.textContent = overrideSelect.value + ' (Overridden)';
+            } else {
+                if (selectWrapper) selectWrapper.classList.add('hidden');
+                const defaultDept = state.userDepartment || 'Other';
+                if (reqDeptHidden) reqDeptHidden.value = defaultDept;
+                if (reqDeptDisplay) reqDeptDisplay.textContent = defaultDept;
+            }
+        });
+
+        overrideSelect.addEventListener('change', () => {
+            if (overrideCheck.checked) {
+                if (reqDeptHidden) reqDeptHidden.value = overrideSelect.value;
+                if (reqDeptDisplay) reqDeptDisplay.textContent = overrideSelect.value + ' (Overridden)';
+            }
+        });
+    }
+
     // --- Search (live) ---
     document.getElementById('my-requests-search').addEventListener('input', (e) => {
         renderMyRequests(state.allRequestsCache, e.target.value);
@@ -103,6 +136,13 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('inventory-search').addEventListener('input', (e) => {
         renderInventory(state.inventoryItemsCache, e.target.value);
     });
+
+    const usersSearch = document.getElementById('users-search');
+    if (usersSearch) {
+        usersSearch.addEventListener('input', (e) => {
+            renderUsersTable(state.allUsersCache, e.target.value);
+        });
+    }
 
     // --- Inventory Table Sorting ---
     document.getElementById('inventory-table-element').addEventListener('click', (e) => {
@@ -215,9 +255,32 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // User Management actions
+        const editUserBtn = e.target.closest('.edit-user-btn');
+        if (editUserBtn) {
+            handleEditUser(editUserBtn.dataset.id);
+            return;
+        }
+
+        const resetPwdBtn = e.target.closest('.reset-pwd-user-btn');
+        if (resetPwdBtn) {
+            handleResetUserPassword(resetPwdBtn.dataset.id, resetPwdBtn.dataset.email);
+            return;
+        }
+
+        const deleteUserBtn = e.target.closest('.delete-user-btn');
+        if (deleteUserBtn) {
+            handleDeleteUser(deleteUserBtn.dataset.id, deleteUserBtn.dataset.email);
+            return;
+        }
+
         // Close modals
         if (e.target.closest('#close-item-modal-btn') || e.target.closest('#cancel-item-modal-btn')) {
             hideItemModal();
+            return;
+        }
+        if (e.target.closest('#close-user-modal-btn') || e.target.closest('#cancel-user-modal-btn')) {
+            hideUserModal();
             return;
         }
         if (e.target.closest('#close-request-details-modal-btn')) {

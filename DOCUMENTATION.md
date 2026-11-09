@@ -406,9 +406,15 @@ Shows the most recent requests with:
 
 **Location:** Sidebar → **New Request**, or the Floating Action Button (+ icon, bottom-right)
 
-**How to create a request:**
+#### Automatic Identity & Department Recognition
+When a user opens the request form, the system **automatically identifies who is signed in and what department they belong to**:
+- Displays a dedicated requester card with their **Email** and **Auto-assigned Department**.
+- **Regular staff are never asked which department** — their request is automatically bound to their department to prevent charging other departments' budgets.
+- **Admin & GM Override:** Only users with `System Administrator` or `General Manager` roles see an optional *"Submit on behalf of another department"* checkbox, which opens a dropdown if they need to place an order for a different team.
 
-1. **Department** — Pre-filled with your assigned department. Change if ordering for another department.
+#### How to create a request:
+
+1. **Identity & Department** — Automatically detected and displayed.
 2. **Priority** — Select from `Normal`, `High`, or `Urgent`.
 3. **Required By Date** — Date picker for when the items are needed.
 4. **Notes** — Optional text field for additional context.
@@ -634,26 +640,26 @@ Generated using **jsPDF** with the **AutoTable** plugin for professional table r
 
 **Location:** Sidebar → **User Management** (visible to **System Administrator** only)
 
-#### Creating a new user
+#### Creating a new user (Seamless)
 
 1. Fill in the form:
    - **Email** — The new user's email address
-   - **Password** — Temporary password (user should change it)
+   - **Temporary Password** — Password (min. 6 characters)
    - **Role** — Select from `User`, `Purchasing`, `General Manager`, `System Administrator`
    - **Department** — Select the user's primary department
 2. Click **Create User**.
-3. **Important:** Because Firebase creates the new user by signing in as them (client-side Auth limitation), the system requires the admin to **re-enter their own password** via a prompt to re-authenticate afterward. This is normal behavior.
-4. The new user appears in the Existing Users table.
+3. **No sign-out / prompt:** The system creates the account in Firebase Authentication and Firestore using an isolated secondary app instance in memory. The administrator session remains completely uninterrupted.
+4. The new user immediately appears in the Existing Users table.
 
-#### Existing Users Table
+#### Managing Existing Users
 
-Displays all registered users with:
-- Email
-- Role
-- Department
-- Created At (timestamp)
+The Existing Users table includes a live search bar and action controls:
 
-> **Note:** There is currently no ability to edit or delete users from the UI. User modification must be done directly through the Firebase Console.
+- **Search Filter:** Type to filter users by email, role, or department in real time.
+- **Account Status Indicator:** Green dot for `Active`, red dot for `Suspended`.
+- **Edit User (Pencil Icon):** Opens a modal to change a user's **Role**, **Department**, or set **Account Status** to `Suspended` or `Active`. If an account is suspended, the user is immediately logged out and blocked from signing in.
+- **Reset Password (Key Icon):** Sends a secure password reset link directly to the user's email via Firebase Auth.
+- **Delete User (Trash Icon):** Prompts for confirmation and deletes the user record from Firestore. (Administrators cannot delete their own active account).
 
 ---
 
@@ -977,23 +983,15 @@ The Cloud Function (`functions/index.js`) creates/updates budget documents with 
 
 **Workaround:** Manually check the `budgets` collection in the Firebase Console for duplicate entries.
 
-### 2. Client-Side Security Only
+### 3. Client-Side Security Only
 
-Role-based access is enforced only in the UI (hiding/showing elements). The Firestore rules allow any authenticated user to read/write all collections. A user with developer tools knowledge could bypass UI restrictions.
+Role-based access is enforced primarily in the UI (hiding/showing elements). The Firestore rules allow any authenticated user to read/write all collections. A user with developer tools knowledge could bypass UI restrictions.
 
 **Recommendation:** Implement server-side role checking using Firebase Custom Claims or granular Firestore rules.
 
-### 3. No Password Reset Flow
+### 4. Pagination for Large Datasets
 
-There is no "Forgot Password" link or self-service password reset. Users must contact the System Administrator, who would need to use the Firebase Console to reset passwords.
-
-### 4. No User Edit / Delete from UI
-
-The User Management section only supports creating users. Editing roles/departments or deleting users must be done through the Firebase Console (Authentication for account deletion, Firestore for profile updates).
-
-### 5. No Pagination
-
-Request lists, inventory tables, and user tables load all documents at once. For very large datasets (thousands of records), this could cause performance issues.
+Request lists and inventory tables load active documents into memory. For very large datasets (thousands of records), cursor-based pagination should be added.
 
 ### 6. CDN Dependency
 

@@ -4,15 +4,17 @@
  */
 
 import state from './state.js';
+import { firebaseConfig } from './config.js';
 import {
     signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut,
-    doc, collection, addDoc, setDoc, deleteDoc,
+    sendPasswordResetEmail, initializeApp, deleteApp, getAuth,
+    doc, collection, addDoc, setDoc, updateDoc, deleteDoc,
     query, where, serverTimestamp, getDoc, getDocs
 } from './firebase.js';
 import {
     showLoadingOverlay, hideLoadingOverlay, showNotification,
     showSection, showConfirmModal, addRequestItemRow, updateTotalCost,
-    hideItemModal
+    hideItemModal, showUserModal, hideUserModal
 } from './ui.js';
 
 // ============================================================================
@@ -57,7 +59,8 @@ export async function handleLogout() {
 // ============================================================================
 
 /**
- * Handles creation of a new user. Requires System Administrator role.
+ * Handles creation of a new user using a temporary secondary Firebase App.
+ * This guarantees the current admin session is completely preserved with no prompts.
  */
 export async function handleCreateUser(e) {
     e.preventDefault();
@@ -65,11 +68,10 @@ export async function handleCreateUser(e) {
         showNotification("You don't have permission to create users.", true);
         return;
     }
-    const email = document.getElementById('new-user-email').value;
+    const email = document.getElementById('new-user-email').value.trim();
     const password = document.getElementById('new-user-password').value;
     const role = document.getElementById('new-user-role').value;
     const department = document.getElementById('new-user-department').value;
-    const adminEmail = state.auth.currentUser.email;
 
     if (!email || !password || !role || !department) {
         showNotification("Please fill in all fields.", true);
@@ -80,35 +82,136 @@ export async function handleCreateUser(e) {
         return;
     }
 
-    const adminPassword = prompt("To create a new user, please re-enter your password:");
-    if (!adminPassword) {
-        showNotification("Password re-entry cancelled.", true);
+    showLoadingOverlay();
+    let secondaryApp = null;
+    try {
+        const tempName = `SecondaryUserCreation_${Date.now()}`;
+        secondaryApp = initializeApp(firebaseConfig, tempName);
+        const secondaryAuth = getAuth(secondaryApp);
+        const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+        const newUser = userCredential.user;
+
+        await setDoc(doc(state.db, 'users', newUser.uid), {
+            email: newUser.email,
+            role: role,
+            department: department,
+            status: 'Active',
+            createdAt: serverTimestamp()
+        });
+
+        await signOut(secondaryAuth);
+        showNotification(`User ${email} created successfully!`, false);
+        e.target.reset();
+    } catch (error) {
+        console.error("Error creating user:", error);
+        showNotification(error.message || "Failed to create user.", true);
+    } finally {
+        if (secondaryApp) {
+            try { await deleteApp(secondaryApp); } catch (_) {}
+        }
+        hideLoadingOverlay();
+    }
+}
+
+/**
+ * Opens edit modal for a user.
+ */
+export function handleEditUser(userId) {
+    if (state.userRole !== 'System Administrator') {
+        showNotification("You don't have permission to edit users.", true);
+        return;
+    }
+    const user = state.allUsersCache.find(u => u.id === userId);
+    if (!user) {
+        showNotification("User not found.", true);
+        return;
+    }
+    showUserModal(user);
+}
+
+/**
+ * Saves edits to user's role, department, and status.
+ */
+export async function handleSaveUserEdit(e) {
+    e.preventDefault();
+    if (state.userRole !== 'System Administrator') {
+        showNotification("You don't have permission to edit users.", true);
+        return;
+    }
+    const userId = document.getElementById('edit-user-id').value;
+    const newRole = document.getElementById('edit-user-role').value;
+    const newDept = document.getElementById('edit-user-department').value;
+    const newStatus = document.getElementById('edit-user-status').value;
+
+    if (!userId || !newRole || !newDept) {
+        showNotification("All fields are required.", true);
         return;
     }
 
     showLoadingOverlay();
     try {
-        await signInWithEmailAndPassword(state.auth, adminEmail, adminPassword);
-        const userCredential = await createUserWithEmailAndPassword(state.auth, email, password);
-        const newUser = userCredential.user;
-        await setDoc(doc(state.db, 'users', newUser.uid), {
-            email: newUser.email, role: role, department: department, createdAt: serverTimestamp()
+        await updateDoc(doc(state.db, 'users', userId), {
+            role: newRole,
+            department: newDept,
+            status: newStatus
         });
-        showNotification(`User ${email} created successfully.`, false);
-        e.target.reset();
+        showNotification("User updated successfully!");
+        hideUserModal();
     } catch (error) {
-        console.error("Error creating user:", error);
-        showNotification(error.message, true);
+        console.error("Error updating user:", error);
+        showNotification("Failed to update user.", true);
     } finally {
         hideLoadingOverlay();
-        if (state.auth.currentUser && state.auth.currentUser.uid !== state.userId) {
-            await signInWithEmailAndPassword(state.auth, adminEmail, adminPassword).catch(reauthError => {
-                console.error("Admin re-authentication failed after user creation:", reauthError);
-                signOut(state.auth);
-                showNotification("Admin session expired. Please log in again.", true);
-            });
-        }
     }
+}
+
+/**
+ * Sends a password reset email to the specified user.
+ */
+export function handleResetUserPassword(userId, userEmail) {
+    if (state.userRole !== 'System Administrator') {
+        showNotification("You don't have permission to reset user passwords.", true);
+        return;
+    }
+    showConfirmModal(`Send password reset email to ${userEmail}?`, async () => {
+        showLoadingOverlay();
+        try {
+            await sendPasswordResetEmail(state.auth, userEmail);
+            showNotification(`Password reset email sent to ${userEmail}`);
+        } catch (error) {
+            console.error("Error sending reset email:", error);
+            showNotification(error.message || "Failed to send reset email.", true);
+        } finally {
+            hideLoadingOverlay();
+        }
+    });
+}
+
+/**
+ * Deletes a user document from Firestore.
+ */
+export function handleDeleteUser(userId, userEmail) {
+    if (state.userRole !== 'System Administrator') {
+        showNotification("You don't have permission to delete users.", true);
+        return;
+    }
+    if (userId === state.userId) {
+        showNotification("You cannot delete your own administrator account.", true);
+        return;
+    }
+
+    showConfirmModal(`Are you sure you want to delete user ${userEmail}? This will revoke their access.`, async () => {
+        showLoadingOverlay();
+        try {
+            await deleteDoc(doc(state.db, 'users', userId));
+            showNotification(`User ${userEmail} has been deleted.`);
+        } catch (error) {
+            console.error("Error deleting user:", error);
+            showNotification("Failed to delete user.", true);
+        } finally {
+            hideLoadingOverlay();
+        }
+    });
 }
 
 // ============================================================================
@@ -132,7 +235,12 @@ export async function handleRequestFormSubmit(e) {
         return;
     }
 
-    const department = document.getElementById('req-department').value;
+    // Read auto-assigned department (with fallback to user profile)
+    let department = document.getElementById('req-department').value;
+    if (!department) {
+        department = state.userDepartment || 'Other';
+    }
+
     const priority = document.getElementById('req-priority').value;
     const requiredBy = document.getElementById('req-date').value;
     const notes = document.getElementById('req-notes').value.trim();

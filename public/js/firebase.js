@@ -4,13 +4,13 @@
  * only need to change URLs in one place.
  */
 
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import {
     getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
-    onAuthStateChanged, signOut
+    onAuthStateChanged, signOut, sendPasswordResetEmail
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 import {
-    getFirestore, doc, collection, addDoc, setDoc, deleteDoc,
+    getFirestore, doc, collection, addDoc, setDoc, updateDoc, deleteDoc,
     onSnapshot, query, where, serverTimestamp, orderBy, getDoc, getDocs
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
@@ -29,8 +29,9 @@ export function initializeFirebaseApp() {
 
 // Re-export Firebase SDK functions for use by other modules
 export {
+    initializeApp, deleteApp, getAuth,
     signInWithEmailAndPassword, createUserWithEmailAndPassword,
-    onAuthStateChanged, signOut,
-    doc, collection, addDoc, setDoc, deleteDoc,
+    onAuthStateChanged, signOut, sendPasswordResetEmail,
+    doc, collection, addDoc, setDoc, updateDoc, deleteDoc,
     onSnapshot, query, where, serverTimestamp, orderBy, getDoc, getDocs
 };

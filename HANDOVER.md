@@ -187,7 +187,7 @@ Firestore requires a composite index for the requests query:
 ## 7. Known Issues & Technical Debt
 
 1. **Firestore security rules are permissive** — Any authenticated user can read/write all collections. Should be role-based.
-2. **User creation uses client-side auth** — `createUserWithEmailAndPassword` logs out the admin temporarily. Should be moved to a Cloud Function.
+2. **User management** — Full user management (Edit role/department/status, Delete, Reset Password, Search) is implemented client-side with a secondary Firebase app instance so admins never get signed out.
 3. **No pagination** — All data (up to 120 days) is loaded at once. Will be slow with thousands of requests.
 4. **No input sanitization** — HTML is injected via `innerHTML` with user data. Should use `textContent` or a sanitization library.
 5. **Budget Cloud Function vs. UI mismatch** — Two different budget doc ID formats exist (see Section 6).

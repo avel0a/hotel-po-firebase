@@ -5,6 +5,7 @@
 
 import state from './state.js';
 import { doc, getDoc } from './firebase.js';
+import { DEPARTMENTS, ROLES } from './config.js';
 
 // ============================================================================
 // Loading Overlay
@@ -82,14 +83,37 @@ export function showSection(sectionId) {
     }
     document.querySelector('.sidebar').classList.remove('open');
 
-    // Handle department dropdown lock for non-admin users
+    // Handle automatic user and department recognition for New Request
     if (sectionId === 'new-request') {
-        const departmentDropdown = document.getElementById('req-department');
-        if (state.userRole !== 'System Administrator') {
-            departmentDropdown.value = state.userDepartment;
-            departmentDropdown.disabled = true;
-        } else {
-            departmentDropdown.disabled = false;
+        const reqUserDisplay = document.getElementById('req-user-display');
+        const reqDeptDisplay = document.getElementById('req-dept-display');
+        const reqDeptHidden = document.getElementById('req-department');
+        const overrideContainer = document.getElementById('req-dept-override-container');
+        const overrideCheck = document.getElementById('req-dept-override-check');
+        const overrideSelect = document.getElementById('req-department-override');
+        const selectWrapper = document.getElementById('req-dept-select-wrapper');
+
+        const currentUserEmail = state.auth?.currentUser?.email || 'N/A';
+        const userDept = state.userDepartment || 'Other';
+
+        if (reqUserDisplay) reqUserDisplay.textContent = currentUserEmail;
+        if (reqDeptDisplay) reqDeptDisplay.textContent = userDept;
+        if (reqDeptHidden) reqDeptHidden.value = userDept;
+
+        // Populate override dropdown with departments
+        if (overrideSelect) {
+            overrideSelect.innerHTML = DEPARTMENTS.map(d => `<option value="${d}" ${d === userDept ? 'selected' : ''}>${d}</option>`).join('');
+        }
+
+        // Only GM and System Admin have permission to order on behalf of another department
+        if (overrideContainer) {
+            if (state.userRole === 'System Administrator' || state.userRole === 'General Manager') {
+                overrideContainer.classList.remove('hidden');
+                if (overrideCheck) overrideCheck.checked = false;
+                if (selectWrapper) selectWrapper.classList.add('hidden');
+            } else {
+                overrideContainer.classList.add('hidden');
+            }
         }
     }
 
@@ -98,11 +122,20 @@ export function showSection(sectionId) {
     }
 
     // Clear search inputs and re-render tables
-    document.getElementById('inventory-search').value = '';
-    document.getElementById('my-requests-search').value = '';
+    const invSearch = document.getElementById('inventory-search');
+    if (invSearch) invSearch.value = '';
+    const myReqSearch = document.getElementById('my-requests-search');
+    if (myReqSearch) myReqSearch.value = '';
+    const usersSearch = document.getElementById('users-search');
+    if (usersSearch) usersSearch.value = '';
+
     renderInventory(state.inventoryItemsCache);
     renderMyRequests(state.allRequestsCache.filter(r => r.createdBy === state.userId));
-    document.getElementById('clear-dashboard-filter-btn').classList.add('hidden');
+    if (state.userRole === 'System Administrator') {
+        renderUsersTable(state.allUsersCache);
+    }
+    const clearFilterBtn = document.getElementById('clear-dashboard-filter-btn');
+    if (clearFilterBtn) clearFilterBtn.classList.add('hidden');
 }
 
 // ============================================================================
@@ -878,26 +911,146 @@ export function renderBudgets(budgets, requests) {
 }
 
 // ============================================================================
-// Users Table Rendering
+// User Management — Modals and Table Rendering
 // ============================================================================
 
-export function renderUsersTable(users) {
+function getRoleBadge(role) {
+    switch (role) {
+        case 'System Administrator':
+            return '<span class="px-2.5 py-1 text-xs font-semibold rounded-full bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-200 inline-flex items-center"><i class="fas fa-shield-alt mr-1"></i>Admin</span>';
+        case 'General Manager':
+            return '<span class="px-2.5 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-200 inline-flex items-center"><i class="fas fa-user-tie mr-1"></i>GM</span>';
+        case 'Purchasing':
+            return '<span class="px-2.5 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-200 inline-flex items-center"><i class="fas fa-shopping-cart mr-1"></i>Purchasing</span>';
+        default:
+            return '<span class="px-2.5 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300 inline-flex items-center"><i class="fas fa-user mr-1"></i>User</span>';
+    }
+}
+
+export function showUserModal(user) {
+    const modal = document.getElementById('user-modal');
+    if (!modal) return;
+
+    const roleOptions = ROLES.map(r => `<option value="${r}" ${r === user.role ? 'selected' : ''}>${r}</option>`).join('');
+    const deptOptions = DEPARTMENTS.map(d => `<option value="${d}" ${d === user.department ? 'selected' : ''}>${d}</option>`).join('');
+    const userStatus = user.status || 'Active';
+
+    modal.innerHTML = `
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md transition-colors duration-300 overflow-hidden mx-4">
+            <div class="p-5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750">
+                <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center">
+                    <i class="fas fa-user-edit mr-2 text-hotel-accent"></i> Edit User
+                </h3>
+                <button id="close-user-modal-btn" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" aria-label="Close modal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <form id="edit-user-form" class="p-6 space-y-4">
+                <input type="hidden" id="edit-user-id" value="${user.id}">
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1">Email</label>
+                    <input type="text" value="${user.email}" disabled class="w-full p-2.5 text-sm bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md text-gray-600 dark:text-gray-300 cursor-not-allowed">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Role</label>
+                    <select id="edit-user-role" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-hotel-accent focus:border-hotel-accent transition-colors">
+                        ${roleOptions}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Department</label>
+                    <select id="edit-user-department" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-hotel-accent focus:border-hotel-accent transition-colors">
+                        ${deptOptions}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Account Status</label>
+                    <select id="edit-user-status" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-hotel-accent focus:border-hotel-accent transition-colors">
+                        <option value="Active" ${userStatus === 'Active' ? 'selected' : ''}>Active</option>
+                        <option value="Suspended" ${userStatus === 'Suspended' ? 'selected' : ''}>Suspended</option>
+                    </select>
+                </div>
+                <div class="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                    <button type="button" id="cancel-user-modal-btn" class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">Cancel</button>
+                    <button type="submit" class="px-5 py-2 bg-hotel-primary text-white text-sm font-medium rounded-md hover:bg-hotel-secondary transition-colors shadow">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    `;
+
+    modal.classList.remove('hidden', 'opacity-0', 'invisible');
+    document.getElementById('close-user-modal-btn').addEventListener('click', hideUserModal);
+    document.getElementById('cancel-user-modal-btn').addEventListener('click', hideUserModal);
+}
+
+export function hideUserModal() {
+    const modal = document.getElementById('user-modal');
+    if (!modal) return;
+    modal.classList.add('opacity-0', 'invisible');
+    setTimeout(() => modal.classList.add('hidden'), 300);
+}
+
+export function renderUsersTable(users, searchTerm = '') {
     const tableBody = document.getElementById('users-table');
     const emptyState = document.getElementById('users-empty');
     if (!tableBody || !emptyState) return;
 
-    if (users.length === 0) {
+    let displayUsers = users || state.allUsersCache;
+
+    if (searchTerm) {
+        const lc = searchTerm.toLowerCase();
+        displayUsers = displayUsers.filter(u =>
+            (u.email && u.email.toLowerCase().includes(lc)) ||
+            (u.role && u.role.toLowerCase().includes(lc)) ||
+            (u.department && u.department.toLowerCase().includes(lc))
+        );
+    }
+
+    if (displayUsers.length === 0) {
         tableBody.innerHTML = '';
         emptyState.classList.remove('hidden');
     } else {
         emptyState.classList.add('hidden');
-        tableBody.innerHTML = users.map(user => `
-            <tr class="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-                <td class="px-6 py-4 whitespace-nowrap">${user.email}</td>
-                <td class="px-6 py-4 whitespace-nowrap">${user.role}</td>
-                <td class="px-6 py-4 whitespace-nowrap">${user.department || 'N/A'}</td>
-                <td class="px-6 py-4 whitespace-nowrap">${user.createdAt?.toDate().toLocaleDateString() || 'N/A'}</td>
-            </tr>
-        `).join('');
+        tableBody.innerHTML = displayUsers.map(user => {
+            const isSelf = user.id === state.userId;
+            const status = user.status || 'Active';
+            const statusDot = status === 'Active'
+                ? '<span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 mr-2" title="Active"></span>'
+                : '<span class="inline-block w-2.5 h-2.5 rounded-full bg-red-500 mr-2" title="Suspended"></span>';
+
+            const createdDate = user.createdAt?.toDate ? user.createdAt.toDate().toLocaleDateString() : 'N/A';
+
+            return `
+                <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100 flex items-center">
+                        ${statusDot}
+                        <span>${user.email}</span>
+                        ${isSelf ? '<span class="ml-2 px-1.5 py-0.5 text-xs bg-blue-100 dark:bg-blue-900/60 text-blue-800 dark:text-blue-200 rounded font-normal">You</span>' : ''}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm">${getRoleBadge(user.role)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">
+                        <i class="fas fa-building text-gray-400 mr-1.5 text-xs"></i>${user.department || 'N/A'}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                        ${createdDate}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-right font-medium">
+                        <div class="flex items-center justify-end space-x-1">
+                            <button class="edit-user-btn p-1.5 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-gray-700 rounded transition-colors" data-id="${user.id}" title="Edit User Role & Department">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            <button class="reset-pwd-user-btn p-1.5 text-amber-600 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-gray-700 rounded transition-colors" data-id="${user.id}" data-email="${user.email}" title="Send Password Reset Email">
+                                <i class="fas fa-key"></i>
+                            </button>
+                            ${!isSelf ? `
+                            <button class="delete-user-btn p-1.5 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-gray-700 rounded transition-colors" data-id="${user.id}" data-email="${user.email}" title="Delete User">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                            ` : ''}
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }).join('');
     }
 }
