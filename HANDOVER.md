@@ -166,6 +166,23 @@ state.js ──────┘                  │
 
 **Document ID pattern:** `{YYYY-MM}_{department-name}` (e.g., `2026-11_Front-Desk`)
 
+### `stock_movements`
+| Field           | Type      | Description                               |
+|-----------------|-----------|-------------------------------------------|
+| `itemId`        | string    | Inventory item ID                         |
+| `itemName`      | string    | Item name                                 |
+| `category`      | string    | Item category                             |
+| `type`          | string    | Movement type: 'IN' (PO Receipt) or 'OUT' (Issuance) |
+| `quantity`      | number    | Units moved                               |
+| `previousStock` | number    | On-hand stock before movement             |
+| `newStock`      | number    | On-hand stock after movement              |
+| `department`    | string    | Receiving department                      |
+| `recipient`     | string    | Staff member who received the items       |
+| `reason`        | string    | Purpose, room number, or PO reference     |
+| `issuedBy`      | string    | UID of user authorizing movement          |
+| `issuedByEmail` | string    | Email of user authorizing movement        |
+| `timestamp`     | timestamp | Server timestamp                          |
+
 ### Required Composite Index
 Firestore requires a composite index for the requests query:
 - **Collection:** `requests`

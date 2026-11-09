@@ -22,6 +22,7 @@ const state = {
     allUsersCache: [],
     inventoryItemsCache: [],
     budgetsCache: [],
+    stockMovementsCache: [],
 
     // Chart.js instances (destroyed and recreated on data change)
     requestsStatusChart: null,

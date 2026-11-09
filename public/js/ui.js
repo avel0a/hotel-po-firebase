@@ -224,6 +224,200 @@ export function hideItemModal() {
 }
 
 // ============================================================================
+// Modals — Issue Stock / Check Out
+// ============================================================================
+
+export function showIssueModal(item) {
+    const modal = document.getElementById('issue-modal');
+    if (!modal) return;
+
+    const deptOptions = DEPARTMENTS.map(d => `<option value="${d}">${d}</option>`).join('');
+
+    modal.innerHTML = `
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md transition-colors duration-300 overflow-hidden mx-4">
+            <div class="p-5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750">
+                <div>
+                    <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center">
+                        <i class="fas fa-dolly mr-2 text-emerald-600"></i> Issue Item / Stock Out
+                    </h3>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Record items taken from the store for hotel use.</p>
+                </div>
+                <button id="close-issue-modal-btn" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" aria-label="Close modal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <form id="issue-stock-form" class="p-6 space-y-4">
+                <input type="hidden" id="issue-item-id" value="${item.id}">
+                <input type="hidden" id="issue-item-name" value="${item.name}">
+                <input type="hidden" id="issue-item-category" value="${item.category || 'General'}">
+                <input type="hidden" id="issue-current-stock" value="${item.stock}">
+
+                <div class="bg-emerald-50 dark:bg-emerald-900/30 p-3.5 rounded-lg border border-emerald-200 dark:border-emerald-800 flex justify-between items-center">
+                    <div>
+                        <div class="font-bold text-gray-900 dark:text-gray-100">${item.name}</div>
+                        <div class="text-xs text-gray-500 dark:text-gray-400">Category: ${item.category}</div>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-xs font-semibold text-emerald-700 dark:text-emerald-300 uppercase">Available in Store</div>
+                        <div class="text-xl font-extrabold text-emerald-800 dark:text-emerald-200">${item.stock}</div>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Quantity to Take / Issue *</label>
+                    <input type="number" id="issue-quantity" min="1" max="${item.stock}" value="1" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors" required>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Must be between 1 and ${item.stock}.</p>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Destination Department *</label>
+                    <select id="issue-department" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors" required>
+                        ${deptOptions}
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Issued To / Staff Name *</label>
+                    <input type="text" id="issue-recipient" placeholder="e.g. Abebe (Chef), Almaz (Housekeeper)..." class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors" required>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Room / Event / Reason</label>
+                    <input type="text" id="issue-reason" placeholder="e.g. Room 204 linen change, Sunday buffet prep..." class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors">
+                </div>
+
+                <div class="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                    <button type="button" id="cancel-issue-modal-btn" class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">Cancel</button>
+                    <button type="submit" class="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-md transition-colors shadow">Confirm Issuance</button>
+                </div>
+            </form>
+        </div>
+    `;
+
+    modal.classList.remove('hidden', 'opacity-0', 'invisible');
+    document.getElementById('close-issue-modal-btn').addEventListener('click', hideIssueModal);
+    document.getElementById('cancel-issue-modal-btn').addEventListener('click', hideIssueModal);
+}
+
+export function hideIssueModal() {
+    const modal = document.getElementById('issue-modal');
+    if (!modal) return;
+    modal.classList.add('opacity-0', 'invisible');
+    setTimeout(() => modal.classList.add('hidden'), 300);
+}
+
+// ============================================================================
+// Modals — Stock Movements / Audit History
+// ============================================================================
+
+export function showStockLogModal() {
+    const modal = document.getElementById('stock-log-modal');
+    if (!modal) return;
+
+    modal.innerHTML = `
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-4xl transition-colors duration-300 overflow-hidden mx-4 max-h-[90vh] flex flex-col">
+            <div class="p-5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750">
+                <div>
+                    <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center">
+                        <i class="fas fa-history mr-2 text-slate-700 dark:text-slate-300"></i> Stock Movement & Usage Audit Trail
+                    </h3>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Real-time log of all items received (Stock In) and issued to departments (Stock Out).</p>
+                </div>
+                <button id="close-stock-log-btn" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" aria-label="Close modal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="p-4 overflow-y-auto flex-1">
+                <div id="stock-movements-table-container"></div>
+            </div>
+            <div class="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-750 flex justify-end">
+                <button type="button" id="close-stock-log-btn-bottom" class="px-5 py-2 bg-slate-700 hover:bg-slate-800 text-white text-sm font-medium rounded-md transition-colors shadow">Close</button>
+            </div>
+        </div>
+    `;
+
+    renderStockMovements(state.stockMovementsCache);
+
+    modal.classList.remove('hidden', 'opacity-0', 'invisible');
+    document.getElementById('close-stock-log-btn').addEventListener('click', hideStockLogModal);
+    document.getElementById('close-stock-log-btn-bottom').addEventListener('click', hideStockLogModal);
+}
+
+export function hideStockLogModal() {
+    const modal = document.getElementById('stock-log-modal');
+    if (!modal) return;
+    modal.classList.add('opacity-0', 'invisible');
+    setTimeout(() => modal.classList.add('hidden'), 300);
+}
+
+export function renderStockMovements(movements) {
+    const container = document.getElementById('stock-movements-table-container');
+    if (!container) return;
+
+    if (!movements || movements.length === 0) {
+        container.innerHTML = `
+            <div class="text-center py-12 text-gray-500 dark:text-gray-400">
+                <i class="fas fa-dolly-flatbed text-4xl mb-3 text-gray-300 dark:text-gray-600"></i>
+                <p class="text-sm font-medium">No stock movements recorded yet.</p>
+                <p class="text-xs text-gray-400 mt-1">When items are received via PO or issued to departments, full records will appear here.</p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = `
+        <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
+            <thead class="bg-gray-50 dark:bg-gray-700/60">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Date & Time</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Item</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Movement</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Stock Level</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Department / Staff</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Reason / Purpose</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Authorized By</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
+                ${movements.map(m => {
+                    const dateStr = m.timestamp?.toDate ? m.timestamp.toDate().toLocaleString() : 'Just now';
+                    const isOut = m.type === 'OUT';
+                    const badge = isOut
+                        ? `<span class="px-2.5 py-1 text-xs font-bold rounded-full bg-red-100 text-red-800 dark:bg-red-900/60 dark:text-red-200 inline-flex items-center"><i class="fas fa-arrow-down mr-1"></i> -${m.quantity} OUT</span>`
+                        : `<span class="px-2.5 py-1 text-xs font-bold rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-200 inline-flex items-center"><i class="fas fa-arrow-up mr-1"></i> +${m.quantity} IN</span>`;
+
+                    const stockChange = typeof m.previousStock === 'number' && typeof m.newStock === 'number'
+                        ? `<span class="text-xs text-gray-500 dark:text-gray-400">${m.previousStock} ➔ <b class="${isOut ? 'text-amber-600' : 'text-emerald-600'}">${m.newStock}</b></span>`
+                        : `<span class="text-xs text-gray-400">N/A</span>`;
+
+                    return `
+                        <tr class="hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors">
+                            <td class="px-4 py-3 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">${dateStr}</td>
+                            <td class="px-4 py-3 whitespace-nowrap font-medium text-gray-900 dark:text-gray-100">
+                                ${m.itemName}
+                                <div class="text-[11px] text-gray-400 font-normal">${m.category || ''}</div>
+                            </td>
+                            <td class="px-4 py-3 whitespace-nowrap">${badge}</td>
+                            <td class="px-4 py-3 whitespace-nowrap">${stockChange}</td>
+                            <td class="px-4 py-3 whitespace-nowrap">
+                                <div class="font-medium text-gray-800 dark:text-gray-200">${m.department || 'N/A'}</div>
+                                <div class="text-xs text-gray-500 dark:text-gray-400">${m.recipient || ''}</div>
+                            </td>
+                            <td class="px-4 py-3 text-xs text-gray-600 dark:text-gray-300 max-w-xs truncate" title="${m.reason || ''}">
+                                ${m.reason || 'N/A'}
+                            </td>
+                            <td class="px-4 py-3 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">
+                                ${m.issuedByEmail || 'N/A'}
+                            </td>
+                        </tr>
+                    `;
+                }).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+// ============================================================================
 // Modals — Confirmation
 // ============================================================================
 
@@ -645,7 +839,18 @@ export function renderInventory(items, searchTerm = '') {
         if (item.stock <= 0) { status = 'Out of Stock'; color = 'red'; }
         else if (item.stock < item.min) { status = 'Low Stock'; color = 'yellow'; }
         else { status = 'In Stock'; color = 'green'; }
-        const actionsHtml = canEdit ? `<td class="px-6 py-4 whitespace-nowrap text-sm font-medium"><button data-id="${item.id}" class="edit-item-btn text-hotel-accent hover:text-hotel-secondary mr-3 transition-colors" aria-label="Edit item"><i class="fas fa-edit"></i></button><button data-id="${item.id}" class="delete-item-btn text-red-500 hover:text-red-700 transition-colors" aria-label="Delete item"><i class="fas fa-trash"></i></button></td>` : '';
+        const actionsHtml = canEdit ? `
+            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                <button data-id="${item.id}" class="issue-item-btn text-emerald-600 hover:text-emerald-800 dark:text-emerald-400 dark:hover:text-emerald-300 mr-3 transition-colors" title="Issue / Check Out stock to department" ${item.stock <= 0 ? 'disabled style="opacity: 0.35; cursor: not-allowed;"' : ''}>
+                    <i class="fas fa-dolly"></i>
+                </button>
+                <button data-id="${item.id}" class="edit-item-btn text-hotel-accent hover:text-hotel-secondary mr-3 transition-colors" aria-label="Edit item" title="Edit Item Details">
+                    <i class="fas fa-edit"></i>
+                </button>
+                <button data-id="${item.id}" class="delete-item-btn text-red-500 hover:text-red-700 transition-colors" aria-label="Delete item" title="Delete Item">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </td>` : '';
         return `
             <tr class="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
                 <td class="px-6 py-4 whitespace-nowrap">${item.name}</td>

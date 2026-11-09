@@ -14,7 +14,7 @@ import {
     renderDashboard, renderDashboardCharts, updateStats,
     renderMyRequests, renderApprovals, renderInventory,
     renderBudgets, renderUsersTable, populateItemNameDatalist,
-    populateReportFilters, applyReportFilters
+    populateReportFilters, applyReportFilters, renderStockMovements
 } from './ui.js';
 
 /**
@@ -136,6 +136,13 @@ function attachFirestoreListeners() {
         renderBudgets(state.budgetsCache, state.allRequestsCache);
     }, error => console.error("Error listening to budgets:", error));
     state.unsubscribers.push(budgetsUnsub);
+
+    // Stock Movements Audit Trail
+    const movementsUnsub = onSnapshot(query(collection(state.db, 'stock_movements'), orderBy("timestamp", "desc")), (snapshot) => {
+        state.stockMovementsCache = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        renderStockMovements(state.stockMovementsCache);
+    }, error => console.error("Error listening to stock movements:", error));
+    state.unsubscribers.push(movementsUnsub);
 
     // Users (only for privileged roles)
     if (state.userRole === 'System Administrator' || state.userRole === 'General Manager' || state.userRole === 'Purchasing') {

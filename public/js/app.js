@@ -13,13 +13,14 @@ import {
     hideRequestDetailsModal, showRequestDetailsModal,
     showUserModal, hideUserModal, renderUsersTable,
     renderDashboard, renderInventory, renderMyRequests,
-    applyReportFilters
+    applyReportFilters, showIssueModal, hideIssueModal,
+    showStockLogModal, hideStockLogModal
 } from './ui.js';
 import {
     handleLogin, handleLogout, handleCreateUser,
     handleEditUser, handleSaveUserEdit, handleResetUserPassword, handleDeleteUser,
     handleRequestFormSubmit, updateRequestStatus, markRequestAsReceived,
-    handleItemFormSubmit, deleteInventoryItem,
+    handleItemFormSubmit, deleteInventoryItem, handleIssueStock,
     handleSetBudget, downloadReportPdf, downloadReportCsv, handleQuickOrderLowStock
 } from './actions.js';
 import { initializeFirebase } from './auth.js';
@@ -52,6 +53,8 @@ document.addEventListener('DOMContentLoaded', () => {
             handleItemFormSubmit(e);
         } else if (e.target.id === 'edit-user-form') {
             handleSaveUserEdit(e);
+        } else if (e.target.id === 'issue-stock-form') {
+            handleIssueStock(e);
         }
     });
 
@@ -83,6 +86,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Report Controls ---
     document.getElementById('apply-report-filters-btn').addEventListener('click', applyReportFilters);
     document.getElementById('download-pdf-btn').addEventListener('click', downloadReportPdf);
+
+    // Stock log modal
+    const stockLogBtn = document.getElementById('view-stock-log-btn');
+    if (stockLogBtn) stockLogBtn.addEventListener('click', showStockLogModal);
 
     // CSV download
     const csvBtn = document.getElementById('download-csv-btn');
@@ -247,6 +254,23 @@ document.addEventListener('DOMContentLoaded', () => {
         // Show add inventory item modal
         if (e.target.closest('#show-add-item-modal-btn')) { showItemModal(); return; }
 
+        // Issue inventory item
+        const issueItemBtn = e.target.closest('.issue-item-btn');
+        if (issueItemBtn) {
+            const itemId = issueItemBtn.dataset.id;
+            const item = state.inventoryItemsCache.find(i => i.id === itemId);
+            if (item) {
+                if (item.stock <= 0) {
+                    showNotification(`${item.name} is completely out of stock. Cannot issue!`, true);
+                    return;
+                }
+                showIssueModal(item);
+            } else {
+                showNotification("Item details not found.", true);
+            }
+            return;
+        }
+
         // Edit inventory item
         const editItemBtn = e.target.closest('.edit-item-btn');
         if (editItemBtn) {
@@ -299,6 +323,14 @@ document.addEventListener('DOMContentLoaded', () => {
         // Close modals
         if (e.target.closest('#close-item-modal-btn') || e.target.closest('#cancel-item-modal-btn')) {
             hideItemModal();
+            return;
+        }
+        if (e.target.closest('#close-issue-modal-btn') || e.target.closest('#cancel-issue-modal-btn')) {
+            hideIssueModal();
+            return;
+        }
+        if (e.target.closest('#close-stock-log-btn') || e.target.closest('#close-stock-log-btn-bottom')) {
+            hideStockLogModal();
             return;
         }
         if (e.target.closest('#close-user-modal-btn') || e.target.closest('#cancel-user-modal-btn')) {

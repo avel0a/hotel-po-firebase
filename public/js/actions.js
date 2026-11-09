@@ -14,7 +14,7 @@ import {
 import {
     showLoadingOverlay, hideLoadingOverlay, showNotification,
     showSection, showConfirmModal, addRequestItemRow, updateTotalCost,
-    hideItemModal, showUserModal, hideUserModal
+    hideItemModal, showUserModal, hideUserModal, hideIssueModal
 } from './ui.js';
 
 // ============================================================================
@@ -335,9 +335,27 @@ export async function markRequestAsReceived(requestId) {
 
                 if (!inventorySnapshot.empty) {
                     const inventoryDoc = inventorySnapshot.docs[0];
-                    const currentStock = inventoryDoc.data().stock;
+                    const currentStock = Number(inventoryDoc.data().stock || 0);
                     const newStock = currentStock + quantityReceived;
                     await setDoc(doc(state.db, 'inventory', inventoryDoc.id), { stock: newStock }, { merge: true });
+
+                    // Log Stock In movement in audit trail
+                    await addDoc(collection(state.db, 'stock_movements'), {
+                        itemId: inventoryDoc.id,
+                        itemName: itemName,
+                        category: inventoryDoc.data().category || 'General',
+                        type: 'IN',
+                        quantity: quantityReceived,
+                        previousStock: currentStock,
+                        newStock: newStock,
+                        department: requestData.department || 'Store',
+                        recipient: state.auth?.currentUser?.email || 'Store',
+                        reason: `Received PO (ID: ${requestId.substring(0, 8)})`,
+                        issuedBy: state.userId,
+                        issuedByEmail: state.auth?.currentUser?.email || 'N/A',
+                        timestamp: serverTimestamp()
+                    });
+
                     console.log(`Restocked ${itemName}: +${quantityReceived} units. New stock: ${newStock}`);
                 } else {
                     console.warn(`Inventory item "${itemName}" not found for restocking.`);
@@ -427,6 +445,75 @@ export async function deleteInventoryItem(id) {
             hideLoadingOverlay();
         }
     });
+}
+
+/**
+ * Handles issuing stock out of the store to a department/staff member.
+ * Deducts stock from inventory and logs an immutable audit trail entry.
+ */
+export async function handleIssueStock(e) {
+    e.preventDefault();
+    if (state.userRole !== 'System Administrator' && state.userRole !== 'Purchasing') {
+        showNotification("You don't have permission to issue inventory items.", true);
+        return;
+    }
+
+    const itemId = document.getElementById('issue-item-id').value;
+    const itemName = document.getElementById('issue-item-name').value;
+    const itemCategory = document.getElementById('issue-item-category').value;
+    const currentStock = Number(document.getElementById('issue-current-stock').value);
+    const quantity = Number(document.getElementById('issue-quantity').value);
+    const department = document.getElementById('issue-department').value;
+    const recipient = document.getElementById('issue-recipient').value.trim();
+    const reason = document.getElementById('issue-reason').value.trim();
+
+    if (!itemId || isNaN(quantity) || quantity <= 0) {
+        showNotification("Please specify a valid quantity to issue.", true);
+        return;
+    }
+
+    if (quantity > currentStock) {
+        showNotification(`Cannot issue ${quantity} units. Only ${currentStock} currently in store!`, true);
+        return;
+    }
+
+    if (!department || !recipient) {
+        showNotification("Please provide both the receiving department and staff member name.", true);
+        return;
+    }
+
+    showLoadingOverlay();
+    try {
+        const newStock = currentStock - quantity;
+
+        // 1. Deduct stock from inventory
+        await setDoc(doc(state.db, 'inventory', itemId), { stock: newStock }, { merge: true });
+
+        // 2. Record Stock Out movement in audit log
+        await addDoc(collection(state.db, 'stock_movements'), {
+            itemId,
+            itemName,
+            category: itemCategory,
+            type: 'OUT',
+            quantity,
+            previousStock: currentStock,
+            newStock,
+            department,
+            recipient,
+            reason: reason || 'Internal hotel usage',
+            issuedBy: state.userId,
+            issuedByEmail: state.auth?.currentUser?.email || 'N/A',
+            timestamp: serverTimestamp()
+        });
+
+        hideIssueModal();
+        showNotification(`Issued ${quantity} units of ${itemName} to ${recipient} (${department}). Remaining stock: ${newStock}`);
+    } catch (error) {
+        console.error("Error issuing stock:", error);
+        showNotification("Failed to issue stock. Check console for details.", true);
+    } finally {
+        hideLoadingOverlay();
+    }
 }
 
 // ============================================================================

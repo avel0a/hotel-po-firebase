@@ -15,7 +15,7 @@ A full-featured **Inventory & Purchase Request Management** web application buil
 - **📊 Dashboard** — Real-time stats, charts (requests over time, status breakdown), quick actions, and recent requests feed
 - **📝 Purchase Requests** — Automatic user and department recognition; optional override for Admins/GM; auto-priced items from inventory; priority levels and required-by dates
 - **✅ Approval Workflow** — General Managers review and approve/reject pending requests with optional approval/rejection notes and full item details
-- **📦 Inventory Management** — Track stock levels, categories, pricing, min-level alerts, sortable/searchable table; "Restock Low Items" 1-click quick-order button
+- **📦 Inventory Management** — Track stock levels, categories, pricing, min-level alerts, sortable/searchable table; "Restock Low Items" 1-click quick-order button; **Store Issuance (Check Out) & Real-Time Movement Audit Trail**
 - **💰 Department Budgeting** — Set monthly budgets per department, track spending vs. allocation with visual progress bars and charts
 - **📈 Reports & PDF/Excel Export** — Filter by date, status, user; generate professional PDF reports or download Excel/CSV data files
 - **👤 User Management** — Admins create users seamlessly without signing out; edit roles, departments, and account status (Active/Suspended); send password reset emails; delete accounts; search users in real time
@@ -132,8 +132,9 @@ firebase deploy --only firestore:rules
 |---------------|--------------------------------------------------------------------------------------------------------|
 | `users`       | `email`, `role`, `department`, `status` ('Active' / 'Suspended'), `createdAt`                           |
 | `requests`    | `department`, `priority`, `requiredBy`, `notes`, `items[]`, `totalCost`, `status`, `approvalNotes`, `createdAt`, `createdBy`, `createdByEmail`, `processedAt`, `received`, `receivedAt` |
-| `inventory`   | `name`, `category`, `stock`, `min`, `price`                                                            |
-| `budgets`     | `department`, `month` (YYYY-MM), `amount`, `year`, `month_num`                                        |
+| `inventory`       | `name`, `category`, `stock`, `min`, `price`                                                            |
+| `budgets`         | `department`, `month` (YYYY-MM), `amount`, `year`, `month_num`                                        |
+| `stock_movements` | `itemId`, `itemName`, `category`, `type` ('IN'/'OUT'), `quantity`, `previousStock`, `newStock`, `department`, `recipient`, `reason`, `issuedBy`, `issuedByEmail`, `timestamp` |
 
 ---
 

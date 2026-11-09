@@ -305,6 +305,26 @@ Stores monthly department budgets. Document ID = `YYYY-MM_Department` (e.g., `20
 | `budget` | number | Allocated budget amount |
 | `spending` | number | Total approved spending (updated by Cloud Function) |
 
+### Collection: `stock_movements`
+
+Stores real-time audit logs of all inventory items received into or issued out of the store. Document ID = auto-generated.
+
+| Field | Type | Description |
+|---|---|---|
+| `itemId` | string | Reference to inventory document ID |
+| `itemName` | string | Name of the inventory item |
+| `category` | string | Item category |
+| `type` | string | Movement type: `'IN'` (PO Receipt) or `'OUT'` (Store Issuance) |
+| `quantity` | number | Units moved |
+| `previousStock` | number | Stock level prior to transaction |
+| `newStock` | number | Stock level after transaction |
+| `department` | string | Destination department |
+| `recipient` | string | Staff member or store receiver name |
+| `reason` | string | Purpose, room number, or PO reference |
+| `issuedBy` | string | UID of user who authorized the movement |
+| `issuedByEmail` | string | Email of user who authorized the movement |
+| `timestamp` | timestamp | Transaction timestamp |
+
 ---
 
 ## 8. Authentication Flow
@@ -536,6 +556,31 @@ At the top of the Inventory section, next to **Add Item**, there is an amber **R
    - Pre-filled unit prices from inventory records
    - An auto-generated note: *"Auto-generated restock order for X low-stock item(s)."*
 4. Staff can review the order, adjust quantities if needed, and submit with one click.
+
+#### Issuing Stock Out to Departments (Check Out)
+
+To track items leaving the store and prevent unexplained loss or theft:
+1. In the Inventory table, click the green **Issue / Dolly** (<i class="fas fa-dolly"></i>) icon on the item row.
+2. An **Issue Item / Stock Out** modal opens displaying:
+   - Item Name, Category, and Available Store Stock
+   - **Quantity to Issue** (between 1 and available stock)
+   - **Destination Department** (Kitchen, Housekeeping, Maintenance, Front Desk, etc.)
+   - **Issued To / Staff Name** (e.g., *"Abebe (Chef)"*, *"Almaz (Housekeeper)"*)
+   - **Room / Event / Reason** (e.g., *"Room 204 linen change"*, *"Sunday buffet prep"*)
+3. Click **Confirm Issuance**.
+4. The system immediately:
+   - Subtracts the issued quantity from on-hand stock
+   - Writes an immutable entry into the `stock_movements` collection in Firestore
+   - Triggers low-stock alerts if stock drops below the minimum threshold
+
+#### Stock Movement & Usage Audit Trail
+
+Click the dark gray **Stock Movement Log** button at the top of Inventory to open the full audit trail:
+- Displays every single item movement with timestamps
+- **Stock In (PO Receipts):** Displayed in green (`+X IN`) with reference to the PO number
+- **Stock Out (Store Issuances):** Displayed in red (`-X OUT`) with destination department and staff name
+- Shows before and after stock levels (`previous ➔ new`)
+- Records the authorized administrator or storekeeper email who performed the transaction
 
 #### Adding an item
 
