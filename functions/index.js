@@ -26,18 +26,18 @@ exports.updateBudgetOnApproval = onDocumentUpdated("requests/{requestId}", async
         const totalCost = after.totalCost;
         const requestDate = after.createdAt.toDate(); // Firestore Timestamp
 
-        if (!department || typeof totalCost !== 'number' || totalCost <= 0) {
+        if (!department || typeof totalCost !== "number" || totalCost <= 0) {
             logger.log(`Request ${event.params.requestId} is missing department or a valid totalCost. Skipping budget update.`);
             return null;
         }
 
         // Format the period as YYYY-MM (e.g., "2024-08")
         const year = requestDate.getFullYear();
-        const month = (requestDate.getMonth() + 1).toString().padStart(2, '0');
+        const month = (requestDate.getMonth() + 1).toString().padStart(2, "0");
         const period = `${year}-${month}`;
-        
+
         // Create the budget document ID (e.g., "Kitchen_2024-08")
-        const budgetDocId = `${department.replace(/\s+/g, '_')}_${period}`;
+        const budgetDocId = `${department.replace(/\s+/g, "_")}_${period}`;
         const budgetRef = db.collection("budgets").doc(budgetDocId);
 
         logger.info(`Processing approval for request ${event.params.requestId}. Updating budget ${budgetDocId} by ${totalCost}.`);
@@ -54,7 +54,7 @@ exports.updateBudgetOnApproval = onDocumentUpdated("requests/{requestId}", async
                         department: department,
                         period: period,
                         budgetAmount: 0, // Default to 0, must be set in the app
-                        spentAmount: totalCost
+                        spentAmount: totalCost,
                     });
                 } else {
                     // If it exists, atomically increment the spent amount.
