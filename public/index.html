@@ -113,8 +113,8 @@
                         <li class="mb-2"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="my-requests"><i class="fas fa-list mr-2 w-5"></i> My Requests</a></li>
                         <li class="mb-2 requires-role" data-role="General Manager"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="approvals"><i class="fas fa-check-circle mr-2 w-5"></i> Approvals</a></li>
                         <li class="mb-2 requires-role" data-role="General Manager, System Administrator"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="budgeting"><i class="fas fa-coins mr-2 w-5"></i> Budgeting</a></li>
-                        <li class="mb-2 requires-role" data-role="System Administrator, Purchasing"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="inventory"><i class="fas fa-boxes mr-2 w-5"></i> Inventory</a></li>
-                        <li class="mb-2 requires-role" data-role="General Manager, System Administrator, Purchasing"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="reports"><i class="fas fa-chart-pie mr-2 w-5"></i> Reports</a></li>
+                        <li class="mb-2 requires-role" data-role="System Administrator, Store Keeper, Purchasing"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="inventory"><i class="fas fa-boxes mr-2 w-5"></i> Inventory & Store</a></li>
+                        <li class="mb-2 requires-role" data-role="General Manager, System Administrator, Purchasing, Store Keeper"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="reports"><i class="fas fa-chart-pie mr-2 w-5"></i> Reports</a></li>
                         <li class="mb-2 requires-role" data-role="System Administrator"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="user-management"><i class="fas fa-users-cog mr-2 w-5"></i> User Management</a></li>
                         <li class="mb-2 requires-role" data-role="System Administrator"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="settings"><i class="fas fa-sliders-h mr-2 w-5"></i> Settings & Roles</a></li>
                     </ul>
@@ -281,6 +281,35 @@
                                 </div>
                             </div>
 
+                            <!-- Order / Request Type Selection -->
+                            <div class="mb-6 p-4 rounded-xl bg-gray-50 dark:bg-gray-750 border border-gray-200 dark:border-gray-700">
+                                <label class="block text-xs uppercase tracking-wider font-semibold text-gray-700 dark:text-gray-300 mb-2">Request Purpose / Order Type</label>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <label class="flex items-start p-3 border rounded-lg cursor-pointer transition-colors bg-white dark:bg-gray-800 border-hotel-accent/40 hover:border-hotel-accent" id="req-type-requisition-label">
+                                        <input type="radio" name="req-type" id="req-type-requisition" value="Requisition" class="mt-1 text-hotel-accent focus:ring-hotel-accent" checked>
+                                        <div class="ml-3">
+                                            <span class="block text-sm font-semibold text-gray-800 dark:text-gray-100 flex items-center">
+                                                <i class="fas fa-hand-holding-box text-blue-500 mr-2"></i> Department Requisition
+                                            </span>
+                                            <span class="block text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                                                Requested from Hotel Store. When approved & received, items are dispensed and <b>store inventory decreases (-)</b>.
+                                            </span>
+                                        </div>
+                                    </label>
+                                    <label class="flex items-start p-3 border rounded-lg cursor-pointer transition-colors bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 hover:border-hotel-accent" id="req-type-po-label">
+                                        <input type="radio" name="req-type" id="req-type-po" value="Purchase Order" class="mt-1 text-hotel-accent focus:ring-hotel-accent">
+                                        <div class="ml-3">
+                                            <span class="block text-sm font-semibold text-gray-800 dark:text-gray-100 flex items-center">
+                                                <i class="fas fa-truck-loading text-emerald-500 mr-2"></i> Purchase Order (Restock Store)
+                                            </span>
+                                            <span class="block text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                                                Purchased from outside vendor. When delivered, Storekeeper checks goods in and <b>store inventory increases (+)</b>.
+                                            </span>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+
                             <!-- Hidden field holding effective department -->
                             <input type="hidden" id="req-department" value="">
 
@@ -346,10 +375,13 @@
                                 <button id="view-stock-log-btn" class="flex-1 md:flex-initial px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-800 transition-colors flex items-center justify-center text-sm font-medium shadow-sm" title="View historical stock in and stock out movements">
                                     <i class="fas fa-history mr-2"></i> Stock Movement Log
                                 </button>
+                                <button id="show-receive-modal-btn" class="flex-1 md:flex-initial px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 requires-role transition-colors flex items-center justify-center text-sm font-medium shadow-sm" data-role="System Administrator, Store Keeper, Purchasing" title="Receive incoming vendor shipment into hotel store">
+                                    <i class="fas fa-arrow-circle-down mr-2"></i> Receive / Fill Store
+                                </button>
                                 <button id="quick-order-low-stock-btn" class="flex-1 md:flex-initial px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors flex items-center justify-center text-sm font-medium shadow-sm" title="Auto-create purchase request for items below minimum level">
                                     <i class="fas fa-cart-plus mr-2"></i> Restock Low Items
                                 </button>
-                                <button id="show-add-item-modal-btn" class="flex-1 md:flex-initial px-4 py-2 bg-hotel-primary text-white rounded-lg hover:bg-hotel-secondary requires-role transition-colors flex items-center justify-center text-sm font-medium shadow-sm" data-role="System Administrator, Purchasing">
+                                <button id="show-add-item-modal-btn" class="flex-1 md:flex-initial px-4 py-2 bg-hotel-primary text-white rounded-lg hover:bg-hotel-secondary requires-role transition-colors flex items-center justify-center text-sm font-medium shadow-sm" data-role="System Administrator, Store Keeper, Purchasing">
                                     <i class="fas fa-plus mr-2"></i> Add Item
                                 </button>
                             </div>
@@ -367,7 +399,7 @@
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors" data-sort="stock">Stock <i class="fas fa-sort text-gray-400"></i></th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Min. Level</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider requires-role" data-role="System Administrator, Purchasing">Actions</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider requires-role" data-role="System Administrator, Store Keeper, Purchasing">Actions</th>
                                   </tr>
                                 </thead>
                                 <tbody id="inventory-table" class="bg-white divide-y divide-gray-200"></tbody>
@@ -575,7 +607,8 @@
                                                 <tr>
                                                     <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Capability / Permission</th>
                                                     <th class="px-2 py-3 text-center text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wider">User</th>
-                                                    <th class="px-2 py-3 text-center text-xs font-semibold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">Purchasing</th>
+                                                    <th class="px-2 py-3 text-center text-xs font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wider">Purchasing</th>
+                                                    <th class="px-2 py-3 text-center text-xs font-semibold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">Store Keeper</th>
                                                     <th class="px-2 py-3 text-center text-xs font-semibold text-blue-700 dark:text-blue-400 uppercase tracking-wider">GM</th>
                                                     <th class="px-2 py-3 text-center text-xs font-semibold text-purple-700 dark:text-purple-400 uppercase tracking-wider">Admin</th>
                                                 </tr>
@@ -602,6 +635,7 @@
 
     <!-- Modals and Notifications -->
     <div id="item-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>
+    <div id="receive-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>
     <div id="issue-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>
     <div id="stock-log-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>
     <div id="user-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>

@@ -13,9 +13,10 @@ A full-featured **Inventory & Purchase Request Management** web application buil
 
 ### Core Modules
 - **📊 Dashboard** — Real-time stats, charts (requests over time, status breakdown), quick actions, and recent requests feed
-- **📝 Purchase Requests** — Automatic user and department recognition; optional override for Admins/GM; auto-priced items from inventory; priority levels and required-by dates
+- **📝 Purchase Requests & Requisitions** — Clear separation between **Department Requisitions** (departments ordering supplies from Store -> decreases stock on receipt) and **Vendor Purchase Orders** (purchasing team restocking the Store -> increases stock when Store receives delivery); Automatic user and department recognition; optional override for Admins/GM; auto-priced items from inventory; priority levels and required-by dates
 - **✅ Approval Workflow** — General Managers review and approve/reject pending requests with optional approval/rejection notes and full item details
-- **📦 Inventory Management** — Track stock levels, categories, pricing, min-level alerts, sortable/searchable table; "Restock Low Items" 1-click quick-order button; **Store Issuance (Check Out) & Real-Time Movement Audit Trail**
+- **📦 Inventory & Store Management** — Track warehouse stock levels, categories, pricing, min-level alerts; **Receive / Fill Store (Stock In)** action to check in vendor shipments (+ stock); **Store Issuance (Check Out / Dolly)** to dispense goods (- stock); "Restock Low Items" 1-click quick-order button; **Real-Time Movement Audit Trail**
+- **🏢 Hotel Roles Separation** — Distinct roles for **Purchasing** (procures from outside vendors, creates restock POs) and **Store Keeper** (manages physical warehouse, fills the store in the system, issues goods to departments)
 - **💰 Department Budgeting** — Set monthly budgets per department, track spending vs. allocation with visual progress bars and charts
 - **📈 Reports & PDF/Excel Export** — Filter by date, status, user; generate professional PDF reports or download Excel/CSV data files
 - **👤 User Management** — Admins create users seamlessly without signing out; edit roles, departments, and account status (Active/Suspended); send password reset emails; delete accounts; search users in real time

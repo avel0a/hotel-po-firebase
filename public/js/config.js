@@ -15,18 +15,18 @@ export const firebaseConfig = {
 
 /** All hotel departments */
 export const DEPARTMENTS = [
-    'Housekeeping', 'Kitchen', 'Maintenance', 'Front Desk', 'Management',
+    'Store', 'Purchasing', 'Housekeeping', 'Kitchen', 'Maintenance', 'Front Desk', 'Management',
     'Information Technology', 'Food&Beverage', 'SPA', 'Security', 'Finance', 'Other'
 ];
 
 /** Inventory item categories */
 export const INVENTORY_CATEGORIES = [
-    'Housekeeping', 'Kitchen', 'Maintenance', 'Office',
+    'Store', 'Housekeeping', 'Kitchen', 'Maintenance', 'Office',
     'Information Technology', 'Food&Beverage', 'SPA', 'Security', 'Finance', 'Other'
 ];
 
 /** User roles */
-export const ROLES = ['User', 'Purchasing', 'General Manager', 'System Administrator'];
+export const ROLES = ['User', 'Purchasing', 'Store Keeper', 'General Manager', 'System Administrator'];
 
 /** Measurement units for requested items */
 export const UNITS = ['Each', 'Box', 'Kg', 'Liter', 'Set'];
@@ -36,10 +36,10 @@ export const PRIORITIES = ['Normal', 'High', 'Urgent'];
 
 /** Configurable granular permissions across the application */
 export const AVAILABLE_PERMISSIONS = [
-    { id: 'create_request', label: 'Create Purchase Requests', desc: 'Can submit new itemized purchase requests' },
+    { id: 'create_request', label: 'Create Purchase Requests & Requisitions', desc: 'Can submit new itemized purchase requests or store requisitions' },
     { id: 'view_all_requests', label: 'View All Requests', desc: 'Can view requests across all hotel departments' },
     { id: 'approve_requests', label: 'Approve / Reject Requests', desc: 'Can review, approve, or reject pending requests' },
-    { id: 'manage_inventory', label: 'Manage Inventory & Stock Out', desc: 'Can add/edit items, issue goods to staff, and restock' },
+    { id: 'manage_inventory', label: 'Manage Inventory & Fill Store', desc: 'Can receive vendor shipments, fill store stock, issue goods to staff, and edit SKUs' },
     { id: 'manage_budgets', label: 'Manage Department Budgets', desc: 'Can set and view monthly department spending limits' },
     { id: 'view_reports', label: 'View Reports & Exports', desc: 'Can view report summaries and export PDF/CSV files' },
     { id: 'manage_users', label: 'Manage Users & Accounts', desc: 'Can create, edit, suspend, and reset staff accounts' },
@@ -57,8 +57,11 @@ export const DEFAULT_ROLE_PERMISSIONS = {
         'create_request', 'view_all_requests', 'approve_requests',
         'manage_budgets', 'view_reports'
     ],
+    'Store Keeper': [
+        'manage_inventory', 'view_all_requests', 'create_request'
+    ],
     'Purchasing': [
-        'create_request', 'view_all_requests', 'manage_inventory', 'view_reports'
+        'create_request', 'view_all_requests', 'view_reports'
     ],
     'User': [
         'create_request'

@@ -237,7 +237,7 @@ export function renderPermissionsMatrix() {
     const tbody = document.getElementById('permissions-matrix-body');
     if (!tbody) return;
 
-    const roles = ['User', 'Purchasing', 'General Manager', 'System Administrator'];
+    const roles = ['User', 'Purchasing', 'Store Keeper', 'General Manager', 'System Administrator'];
 
     tbody.innerHTML = AVAILABLE_PERMISSIONS.map(perm => {
         const cellsHtml = roles.map(role => {
@@ -306,6 +306,19 @@ export function showSection(sectionId) {
             overrideSelect.innerHTML = activeDepts.map(d => `<option value="${d}" ${d === userDept ? 'selected' : ''}>${d}</option>`).join('');
         }
 
+        // Auto-select Request Purpose based on user role
+        const reqTypePo = document.getElementById('req-type-po');
+        const reqTypeReq = document.getElementById('req-type-requisition');
+        if (reqTypePo && reqTypeReq) {
+            if (state.userRole === 'Purchasing' || state.userRole === 'Store Keeper' || userDept === 'Store' || userDept === 'Purchasing') {
+                reqTypePo.checked = true;
+                reqTypeReq.checked = false;
+            } else {
+                reqTypeReq.checked = true;
+                reqTypePo.checked = false;
+            }
+        }
+
         // Only GM and System Admin have permission to order on behalf of another department
         if (overrideContainer) {
             if (state.userRole === 'System Administrator' || state.userRole === 'General Manager') {
@@ -336,7 +349,7 @@ export function showSection(sectionId) {
     if (usersSearch) usersSearch.value = '';
 
     renderInventory(state.inventoryItemsCache);
-    renderMyRequests(state.allRequestsCache.filter(r => r.createdBy === state.userId));
+    renderMyRequests(state.allRequestsCache);
     if (state.userRole === 'System Administrator') {
         renderUsersTable(state.allUsersCache);
     }
@@ -507,6 +520,141 @@ export function showIssueModal(item) {
 
 export function hideIssueModal() {
     const modal = document.getElementById('issue-modal');
+    if (!modal) return;
+    modal.classList.add('opacity-0', 'invisible');
+    setTimeout(() => modal.classList.add('hidden'), 300);
+}
+
+// ============================================================================
+// Modals — Receive Goods / Fill Store (Stock In)
+// ============================================================================
+
+export function showReceiveModal(item = null) {
+    const modal = document.getElementById('receive-modal');
+    if (!modal) return;
+
+    const items = state.inventoryItemsCache || [];
+    const itemSelectHtml = item ? `
+        <input type="hidden" id="receive-item-id" value="${item.id}">
+        <input type="hidden" id="receive-item-name" value="${item.name}">
+        <input type="hidden" id="receive-item-category" value="${item.category || 'General'}">
+        <input type="hidden" id="receive-current-stock" value="${item.stock}">
+        <div class="bg-emerald-50 dark:bg-emerald-900/30 p-3.5 rounded-lg border border-emerald-200 dark:border-emerald-800 flex justify-between items-center">
+            <div>
+                <div class="font-bold text-gray-900 dark:text-gray-100">${item.name}</div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">Category: ${item.category}</div>
+            </div>
+            <div class="text-right">
+                <div class="text-xs font-semibold text-emerald-700 dark:text-emerald-300 uppercase">Current Stock</div>
+                <div class="text-xl font-extrabold text-emerald-800 dark:text-emerald-200">${item.stock}</div>
+            </div>
+        </div>
+    ` : `
+        <div>
+            <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Select Item to Stock In</label>
+            <select id="receive-item-select" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors" required>
+                <option value="">-- Choose item from inventory --</option>
+                ${items.map(i => `<option value="${i.id}" data-stock="${i.stock}" data-name="${i.name}" data-category="${i.category}" data-price="${i.price || 0}">${i.name} (Current: ${i.stock})</option>`).join('')}
+            </select>
+        </div>
+        <div id="receive-selected-info" class="hidden bg-emerald-50 dark:bg-emerald-900/30 p-3 rounded-lg border border-emerald-200 dark:border-emerald-800 flex justify-between items-center">
+            <div>
+                <div id="receive-selected-name" class="font-bold text-gray-900 dark:text-gray-100"></div>
+                <div id="receive-selected-category" class="text-xs text-gray-500 dark:text-gray-400"></div>
+            </div>
+            <div class="text-right">
+                <div class="text-xs font-semibold text-emerald-700 dark:text-emerald-300 uppercase">Current Stock</div>
+                <div id="receive-selected-stock" class="text-xl font-extrabold text-emerald-800 dark:text-emerald-200">0</div>
+            </div>
+        </div>
+        <input type="hidden" id="receive-item-id" value="">
+        <input type="hidden" id="receive-item-name" value="">
+        <input type="hidden" id="receive-item-category" value="">
+        <input type="hidden" id="receive-current-stock" value="0">
+    `;
+
+    modal.innerHTML = `
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md transition-colors duration-300 overflow-hidden mx-4">
+            <div class="p-5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750">
+                <div>
+                    <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center">
+                        <i class="fas fa-arrow-circle-down mr-2 text-emerald-600"></i> Receive Goods / Fill Store
+                    </h3>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Record incoming vendor deliveries and increase store inventory.</p>
+                </div>
+                <button id="close-receive-modal-btn" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" aria-label="Close modal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <form id="receive-stock-form" class="p-6 space-y-4">
+                ${itemSelectHtml}
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Quantity Received</label>
+                        <input type="number" id="receive-quantity" min="1" placeholder="e.g. 50" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors" required>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Unit Price ($ / Birr)</label>
+                        <input type="number" step="0.01" min="0" id="receive-price" value="${item ? (item.price || '') : ''}" placeholder="e.g. 250" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Supplier / Vendor Name</label>
+                    <input type="text" id="receive-supplier" placeholder="e.g. BGI Ethiopia, Ambassel, Local Market..." class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors" required>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Delivery Note / Invoice / PO #</label>
+                    <input type="text" id="receive-invoice" placeholder="e.g. INV-2024-889, DN-104..." class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors">
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Notes / Storage Location</label>
+                    <input type="text" id="receive-notes" placeholder="e.g. Main Dry Store Shelf 4, Cold Room..." class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors">
+                </div>
+
+                <div class="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                    <button type="button" id="cancel-receive-modal-btn" class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">Cancel</button>
+                    <button type="submit" class="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-md transition-colors shadow">Confirm Stock In</button>
+                </div>
+            </form>
+        </div>
+    `;
+
+    // Hook up dropdown selection if no pre-selected item
+    const select = document.getElementById('receive-item-select');
+    if (select) {
+        select.addEventListener('change', () => {
+            const opt = select.options[select.selectedIndex];
+            const infoBox = document.getElementById('receive-selected-info');
+            if (select.value && opt) {
+                document.getElementById('receive-item-id').value = select.value;
+                document.getElementById('receive-item-name').value = opt.dataset.name;
+                document.getElementById('receive-item-category').value = opt.dataset.category;
+                document.getElementById('receive-current-stock').value = opt.dataset.stock;
+                document.getElementById('receive-selected-name').textContent = opt.dataset.name;
+                document.getElementById('receive-selected-category').textContent = `Category: ${opt.dataset.category}`;
+                document.getElementById('receive-selected-stock').textContent = opt.dataset.stock;
+                const priceInput = document.getElementById('receive-price');
+                if (priceInput && (!priceInput.value || priceInput.value == '0')) {
+                    priceInput.value = opt.dataset.price;
+                }
+                if (infoBox) infoBox.classList.remove('hidden');
+            } else {
+                if (infoBox) infoBox.classList.add('hidden');
+            }
+        });
+    }
+
+    modal.classList.remove('hidden', 'opacity-0', 'invisible');
+    document.getElementById('close-receive-modal-btn').addEventListener('click', hideReceiveModal);
+    document.getElementById('cancel-receive-modal-btn').addEventListener('click', hideReceiveModal);
+}
+
+export function hideReceiveModal() {
+    const modal = document.getElementById('receive-modal');
     if (!modal) return;
     modal.classList.add('opacity-0', 'invisible');
     setTimeout(() => modal.classList.add('hidden'), 300);
@@ -905,7 +1053,7 @@ export function renderMyRequests(requests, searchTerm = '') {
     if (!tableBody || !emptyState) return;
 
     let displayRequests = requests;
-    if (state.userRole === 'Purchasing' || state.userRole === 'General Manager' || state.userRole === 'System Administrator') {
+    if (hasPermission(state.userRole, 'view_all_requests')) {
         displayRequests = state.allRequestsCache;
     } else {
         displayRequests = state.allRequestsCache.filter(r => r.createdBy === state.userId);
@@ -918,6 +1066,7 @@ export function renderMyRequests(requests, searchTerm = '') {
             req.items.some(item => item.name.toLowerCase().includes(lc)) ||
             req.status.toLowerCase().includes(lc) ||
             req.priority.toLowerCase().includes(lc) ||
+            (req.requestType && req.requestType.toLowerCase().includes(lc)) ||
             (req.createdByEmail && req.createdByEmail.toLowerCase().includes(lc))
         );
     }
@@ -929,17 +1078,44 @@ export function renderMyRequests(requests, searchTerm = '') {
         emptyState.classList.add('hidden');
         tableBody.innerHTML = displayRequests.map(req => {
             let receivedCell = '';
-            if (req.status === 'Approved' && !req.received && req.createdBy === state.userId) {
-                receivedCell = `<button class="mark-received-btn px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-xs transition-colors" data-id="${req.id}">Mark as Received</button>`;
+            const isRestockPO = req.requestType === 'Purchase Order' || req.department === 'Store' || req.isRestockOrder === true;
+
+            const typeBadge = isRestockPO
+                ? '<span class="text-[10px] uppercase font-bold px-1.5 py-0.5 bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-200 rounded ml-1.5" title="Vendor Purchase Order to replenish Store">PO (Restock)</span>'
+                : '<span class="text-[10px] uppercase font-bold px-1.5 py-0.5 bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-200 rounded ml-1.5" title="Department Requisition from Store">Requisition</span>';
+
+            if (req.status === 'Approved' && !req.received) {
+                if (isRestockPO) {
+                    // Purchase Order: Storekeeper or Admin receives delivery into warehouse
+                    if (hasPermission(state.userRole, 'manage_inventory') || req.createdBy === state.userId) {
+                        receivedCell = `<button class="mark-received-btn px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs transition-colors inline-flex items-center shadow-sm" data-id="${req.id}" title="Receive vendor shipment into store (increases stock)"><i class="fas fa-arrow-circle-down mr-1"></i> Receive into Store</button>`;
+                    } else {
+                        receivedCell = `<span class="px-2 py-0.5 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/40 rounded border border-amber-200 dark:border-amber-700">Awaiting Store Receipt</span>`;
+                    }
+                } else {
+                    // Department Requisition: Requester or Storekeeper confirms delivery to department (decreases store stock)
+                    if (req.createdBy === state.userId || hasPermission(state.userRole, 'manage_inventory')) {
+                        receivedCell = `<button class="mark-received-btn px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs transition-colors inline-flex items-center shadow-sm" data-id="${req.id}" title="Confirm receipt of items (dispensed from store stock)"><i class="fas fa-check mr-1"></i> Confirm Received</button>`;
+                    } else {
+                        receivedCell = `<span class="px-2 py-0.5 text-xs text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/40 rounded">Pending Dispense</span>`;
+                    }
+                }
             } else if (req.received) {
-                receivedCell = '<span class="px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">Received</span>';
+                if (isRestockPO) {
+                    receivedCell = '<span class="px-2 py-1 text-xs rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-200 inline-flex items-center font-medium"><i class="fas fa-warehouse mr-1"></i>Stocked In</span>';
+                } else {
+                    receivedCell = '<span class="px-2 py-1 text-xs rounded-full bg-green-100 text-green-800 dark:bg-green-900/60 dark:text-green-200 inline-flex items-center font-medium"><i class="fas fa-check mr-1"></i>Received</span>';
+                }
             }
+
             const viewBtn = `<button class="view-request-btn px-3 py-1 bg-hotel-accent text-white rounded hover:bg-blue-600 text-xs transition-colors mr-2" data-id="${req.id}">View Details</button>`;
             return `
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-                    <td class="px-6 py-4 whitespace-nowrap">${req.createdAt?.toDate().toLocaleDateString() || 'N/A'}</td>
-                    <td class="px-6 py-4 whitespace-nowrap">${req.department}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">$${(req.totalCost || 0).toFixed(2)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 dark:text-gray-300">${req.createdAt?.toDate ? req.createdAt.toDate().toLocaleDateString() : 'N/A'}</td>
+                    <td class="px-6 py-4 whitespace-nowrap font-medium text-gray-900 dark:text-gray-100">
+                        ${req.department} ${typeBadge}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300 font-semibold">$${(req.totalCost || 0).toFixed(2)}</td>
                     <td class="px-6 py-4 whitespace-nowrap">${req.priority}</td>
                     <td class="px-6 py-4 whitespace-nowrap">${getStatusBadge(req.status)}</td>
                     <td class="px-6 py-4 whitespace-nowrap">${viewBtn}${receivedCell}</td>
@@ -1014,7 +1190,7 @@ export function renderInventory(items, searchTerm = '') {
     const emptyState = document.getElementById('inventory-empty');
     if (!tableBody || !emptyState) return;
 
-    const canEdit = state.userRole === 'System Administrator' || state.userRole === 'Purchasing';
+    const canEdit = state.userRole === 'System Administrator' || hasPermission(state.userRole, 'manage_inventory');
     let itemsToDisplay = [...items];
 
     if (searchTerm) {
@@ -1047,7 +1223,10 @@ export function renderInventory(items, searchTerm = '') {
         else { status = 'In Stock'; color = 'green'; }
         const actionsHtml = canEdit ? `
             <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                <button data-id="${item.id}" class="issue-item-btn text-emerald-600 hover:text-emerald-800 dark:text-emerald-400 dark:hover:text-emerald-300 mr-3 transition-colors" title="Issue / Check Out stock to department" ${item.stock <= 0 ? 'disabled style="opacity: 0.35; cursor: not-allowed;"' : ''}>
+                <button data-id="${item.id}" class="receive-item-btn text-emerald-600 hover:text-emerald-800 dark:text-emerald-400 dark:hover:text-emerald-300 mr-3 transition-colors" title="Receive / Fill Store (Stock In)">
+                    <i class="fas fa-arrow-circle-down"></i>
+                </button>
+                <button data-id="${item.id}" class="issue-item-btn text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 mr-3 transition-colors" title="Issue / Check Out stock to department" ${item.stock <= 0 ? 'disabled style="opacity: 0.35; cursor: not-allowed;"' : ''}>
                     <i class="fas fa-dolly"></i>
                 </button>
                 <button data-id="${item.id}" class="edit-item-btn text-hotel-accent hover:text-hotel-secondary mr-3 transition-colors" aria-label="Edit item" title="Edit Item Details">
@@ -1334,8 +1513,10 @@ function getRoleBadge(role) {
             return '<span class="px-2.5 py-1 text-xs font-semibold rounded-full bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-200 inline-flex items-center"><i class="fas fa-shield-alt mr-1"></i>Admin</span>';
         case 'General Manager':
             return '<span class="px-2.5 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-200 inline-flex items-center"><i class="fas fa-user-tie mr-1"></i>GM</span>';
+        case 'Store Keeper':
+            return '<span class="px-2.5 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-200 inline-flex items-center"><i class="fas fa-warehouse mr-1"></i>Store Keeper</span>';
         case 'Purchasing':
-            return '<span class="px-2.5 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-200 inline-flex items-center"><i class="fas fa-shopping-cart mr-1"></i>Purchasing</span>';
+            return '<span class="px-2.5 py-1 text-xs font-semibold rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 inline-flex items-center"><i class="fas fa-shopping-cart mr-1"></i>Purchasing</span>';
         default:
             return '<span class="px-2.5 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300 inline-flex items-center"><i class="fas fa-user mr-1"></i>User</span>';
     }

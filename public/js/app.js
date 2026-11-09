@@ -14,6 +14,7 @@ import {
     showUserModal, hideUserModal, renderUsersTable,
     renderDashboard, renderInventory, renderMyRequests,
     applyReportFilters, showIssueModal, hideIssueModal,
+    showReceiveModal, hideReceiveModal,
     showStockLogModal, hideStockLogModal,
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix
 } from './ui.js';
@@ -21,7 +22,7 @@ import {
     handleLogin, handleLogout, handleCreateUser,
     handleEditUser, handleSaveUserEdit, handleResetUserPassword, handleDeleteUser,
     handleRequestFormSubmit, updateRequestStatus, markRequestAsReceived,
-    handleItemFormSubmit, deleteInventoryItem, handleIssueStock,
+    handleItemFormSubmit, deleteInventoryItem, handleIssueStock, handleReceiveStock,
     handleSetBudget, downloadReportPdf, downloadReportCsv, handleQuickOrderLowStock,
     handleAddDepartment, handleDeleteDepartment, handleSaveRolePermissions, handleResetRolePermissions
 } from './actions.js';
@@ -64,6 +65,8 @@ document.addEventListener('DOMContentLoaded', () => {
             handleSaveUserEdit(e);
         } else if (e.target.id === 'issue-stock-form') {
             handleIssueStock(e);
+        } else if (e.target.id === 'receive-stock-form') {
+            handleReceiveStock(e);
         }
     });
 
@@ -151,6 +154,21 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    // --- Order / Request Type Radio Selector ---
+    document.querySelectorAll('input[name="req-type"]').forEach(radio => {
+        radio.addEventListener('change', () => {
+            const reqLabel = document.getElementById('req-type-requisition-label');
+            const poLabel = document.getElementById('req-type-po-label');
+            if (radio.value === 'Requisition') {
+                if (reqLabel) reqLabel.className = 'flex items-start p-3 border rounded-lg cursor-pointer transition-colors bg-white dark:bg-gray-800 border-hotel-accent/60 shadow-sm';
+                if (poLabel) poLabel.className = 'flex items-start p-3 border rounded-lg cursor-pointer transition-colors bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 opacity-75';
+            } else {
+                if (poLabel) poLabel.className = 'flex items-start p-3 border rounded-lg cursor-pointer transition-colors bg-white dark:bg-gray-800 border-emerald-500/60 shadow-sm';
+                if (reqLabel) reqLabel.className = 'flex items-start p-3 border rounded-lg cursor-pointer transition-colors bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 opacity-75';
+            }
+        });
+    });
 
     // --- Search (live) ---
     document.getElementById('my-requests-search').addEventListener('input', (e) => {
@@ -263,6 +281,18 @@ document.addEventListener('DOMContentLoaded', () => {
         // Show add inventory item modal
         if (e.target.closest('#show-add-item-modal-btn')) { showItemModal(); return; }
 
+        // Show receive goods / fill store modal
+        if (e.target.closest('#show-receive-modal-btn')) { showReceiveModal(); return; }
+
+        // Receive specific inventory item
+        const receiveItemBtn = e.target.closest('.receive-item-btn');
+        if (receiveItemBtn) {
+            const itemId = receiveItemBtn.dataset.id;
+            const item = state.inventoryItemsCache.find(i => i.id === itemId);
+            showReceiveModal(item);
+            return;
+        }
+
         // Issue inventory item
         const issueItemBtn = e.target.closest('.issue-item-btn');
         if (issueItemBtn) {
@@ -339,6 +369,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // Close modals
         if (e.target.closest('#close-item-modal-btn') || e.target.closest('#cancel-item-modal-btn')) {
             hideItemModal();
+            return;
+        }
+        if (e.target.closest('#close-receive-modal-btn') || e.target.closest('#cancel-receive-modal-btn')) {
+            hideReceiveModal();
             return;
         }
         if (e.target.closest('#close-issue-modal-btn') || e.target.closest('#cancel-issue-modal-btn')) {

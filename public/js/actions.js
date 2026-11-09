@@ -14,7 +14,7 @@ import {
 import {
     showLoadingOverlay, hideLoadingOverlay, showNotification,
     showSection, showConfirmModal, addRequestItemRow, updateTotalCost,
-    hideItemModal, showUserModal, hideUserModal, hideIssueModal,
+    hideItemModal, showUserModal, hideUserModal, hideIssueModal, hideReceiveModal,
     hasPermission, getActiveDepartments, renderPermissionsMatrix, updateUIVisibility
 } from './ui.js';
 
@@ -251,12 +251,16 @@ export async function handleRequestFormSubmit(e) {
     const notes = document.getElementById('req-notes').value.trim();
     const totalCost = items.reduce((acc, item) => acc + (item.price * item.quantity), 0);
 
+    const reqTypeInput = document.querySelector('input[name="req-type"]:checked');
+    const requestType = reqTypeInput ? reqTypeInput.value : (department === 'Store' || department === 'Purchasing' ? 'Purchase Order' : 'Requisition');
+
     if (!department || !priority || !requiredBy) {
         showNotification("Please fill in all required request details.", true);
         return;
     }
 
     const newRequest = {
+        requestType,
         department, priority, requiredBy, notes, items, totalCost,
         status: 'Pending',
         createdAt: serverTimestamp(),
@@ -319,8 +323,19 @@ export async function markRequestAsReceived(requestId) {
         }
         const requestData = requestDoc.data();
 
-        if (requestData.createdBy !== state.userId) {
-            showNotification("You can only mark your own approved requests as received.", true);
+        const isRestockPO = requestData.requestType === 'Purchase Order' ||
+                            requestData.department === 'Store' ||
+                            requestData.isRestockOrder === true;
+
+        // Permissions:
+        // - For Restock PO: Storekeeper, Admin, or the requester (Purchasing)
+        // - For Department Requisition: The department requester, or Storekeeper/Admin dispensing the items
+        const canFulfill = requestData.createdBy === state.userId ||
+                           hasPermission(state.userRole, 'manage_inventory') ||
+                           state.userRole === 'System Administrator';
+
+        if (!canFulfill) {
+            showNotification("You do not have permission to confirm receipt for this request.", true);
             return;
         }
         if (requestData.received) {
@@ -328,50 +343,76 @@ export async function markRequestAsReceived(requestId) {
             return;
         }
 
-        await setDoc(requestDocRef, { received: true, receivedAt: serverTimestamp() }, { merge: true });
+        await setDoc(requestDocRef, {
+            received: true,
+            receivedAt: serverTimestamp(),
+            receivedBy: state.userId,
+            receivedByEmail: state.auth?.currentUser?.email || 'N/A'
+        }, { merge: true });
 
-        // RESTOCK: Increase inventory stock for each received item
+        // Update inventory stock for each item
         if (requestData.items && requestData.items.length > 0) {
             for (const item of requestData.items) {
                 const itemName = item.name;
-                const quantityReceived = Number(item.quantity);
+                const quantity = Number(item.quantity);
                 const inventoryItemQuery = query(collection(state.db, 'inventory'), where("name", "==", itemName));
                 const inventorySnapshot = await getDocs(inventoryItemQuery);
 
                 if (!inventorySnapshot.empty) {
                     const inventoryDoc = inventorySnapshot.docs[0];
                     const currentStock = Number(inventoryDoc.data().stock || 0);
-                    const newStock = currentStock + quantityReceived;
+
+                    let newStock;
+                    let movementType;
+                    let movementReason;
+
+                    if (isRestockPO) {
+                        // RESTOCK PO: Purchased from outside vendor -> INCREASES hotel store stock
+                        newStock = currentStock + quantity;
+                        movementType = 'IN';
+                        movementReason = `Vendor PO Delivery Received (PO: #${requestId.substring(0, 8)})`;
+                    } else {
+                        // DEPARTMENT REQUISITION: Taken from store for department consumption -> DECREASES store stock
+                        newStock = Math.max(0, currentStock - quantity);
+                        movementType = 'OUT';
+                        movementReason = `Issued to ${requestData.department || 'Department'} (Req: #${requestId.substring(0, 8)})`;
+                    }
+
                     await setDoc(doc(state.db, 'inventory', inventoryDoc.id), { stock: newStock }, { merge: true });
 
-                    // Log Stock In movement in audit trail
+                    // Log Stock movement in audit trail
                     await addDoc(collection(state.db, 'stock_movements'), {
                         itemId: inventoryDoc.id,
                         itemName: itemName,
                         category: inventoryDoc.data().category || 'General',
-                        type: 'IN',
-                        quantity: quantityReceived,
+                        type: movementType,
+                        quantity: quantity,
                         previousStock: currentStock,
                         newStock: newStock,
                         department: requestData.department || 'Store',
-                        recipient: state.auth?.currentUser?.email || 'Store',
-                        reason: `Received PO (ID: ${requestId.substring(0, 8)})`,
+                        recipient: requestData.createdByEmail || state.auth?.currentUser?.email || 'Staff',
+                        reason: movementReason,
                         issuedBy: state.userId,
                         issuedByEmail: state.auth?.currentUser?.email || 'N/A',
                         timestamp: serverTimestamp()
                     });
 
-                    console.log(`Restocked ${itemName}: +${quantityReceived} units. New stock: ${newStock}`);
+                    console.log(`Updated ${itemName}: ${movementType} ${quantity} units. New stock: ${newStock}`);
                 } else {
-                    console.warn(`Inventory item "${itemName}" not found for restocking.`);
-                    showNotification(`Note: "${itemName}" is not in inventory. Stock was not updated.`, true);
+                    console.warn(`Inventory item "${itemName}" not found in database.`);
+                    showNotification(`Note: "${itemName}" is not registered in inventory.`, true);
                 }
             }
         }
-        showNotification("Marked as received and inventory updated.");
+
+        if (isRestockPO) {
+            showNotification("PO items received into Store! Store stock levels increased.");
+        } else {
+            showNotification(`Requisition fulfilled! Items issued to ${requestData.department} (store stock decreased).`);
+        }
     } catch (error) {
         console.error("Error marking as received or updating inventory:", error);
-        showNotification("Failed to mark as received and update inventory.", true);
+        showNotification("Failed to update inventory status.", true);
     } finally {
         hideLoadingOverlay();
     }
@@ -516,6 +557,84 @@ export async function handleIssueStock(e) {
     } catch (error) {
         console.error("Error issuing stock:", error);
         showNotification("Failed to issue stock. Check console for details.", true);
+    } finally {
+        hideLoadingOverlay();
+    }
+}
+
+/**
+ * Handles receiving stock into the warehouse / store from a supplier.
+ * Directly increases inventory stock and logs an immutable audit trail entry.
+ */
+export async function handleReceiveStock(e) {
+    e.preventDefault();
+    if (!hasPermission(state.userRole, 'manage_inventory')) {
+        showNotification("You don't have permission to receive inventory into the store.", true);
+        return;
+    }
+
+    const itemId = document.getElementById('receive-item-id').value;
+    const itemName = document.getElementById('receive-item-name').value;
+    const itemCategory = document.getElementById('receive-item-category').value;
+    const currentStock = Number(document.getElementById('receive-current-stock').value || 0);
+    const quantity = Number(document.getElementById('receive-quantity').value);
+    const unitPrice = Number(document.getElementById('receive-price').value || 0);
+    const supplier = document.getElementById('receive-supplier').value.trim();
+    const invoice = document.getElementById('receive-invoice').value.trim();
+    const notes = document.getElementById('receive-notes').value.trim();
+
+    if (!itemId || !itemName) {
+        showNotification("Please select a valid inventory item to stock in.", true);
+        return;
+    }
+
+    if (isNaN(quantity) || quantity <= 0) {
+        showNotification("Please specify a valid positive quantity received.", true);
+        return;
+    }
+
+    if (!supplier) {
+        showNotification("Please provide the supplier or vendor name.", true);
+        return;
+    }
+
+    showLoadingOverlay();
+    try {
+        const newStock = currentStock + quantity;
+        const updateData = { stock: newStock };
+        if (unitPrice > 0) {
+            updateData.price = unitPrice;
+        }
+
+        // 1. Update stock in inventory
+        await setDoc(doc(state.db, 'inventory', itemId), updateData, { merge: true });
+
+        // 2. Log Stock In movement in audit trail
+        let fullReason = `Vendor Delivery: ${supplier}`;
+        if (invoice) fullReason += ` (Ref: ${invoice})`;
+        if (notes) fullReason += ` - ${notes}`;
+
+        await addDoc(collection(state.db, 'stock_movements'), {
+            itemId,
+            itemName,
+            category: itemCategory || 'General',
+            type: 'IN',
+            quantity,
+            previousStock: currentStock,
+            newStock,
+            department: 'Store',
+            recipient: 'Store / Warehouse',
+            reason: fullReason,
+            issuedBy: state.userId,
+            issuedByEmail: state.auth?.currentUser?.email || 'N/A',
+            timestamp: serverTimestamp()
+        });
+
+        hideReceiveModal();
+        showNotification(`Successfully received ${quantity} units of ${itemName} into Store! New stock: ${newStock}`);
+    } catch (error) {
+        console.error("Error receiving stock:", error);
+        showNotification("Failed to receive stock into store. Check console for details.", true);
     } finally {
         hideLoadingOverlay();
     }
@@ -732,6 +851,15 @@ export function handleQuickOrderLowStock() {
 
     // Navigate to the new-request section
     showSection('new-request');
+
+    // Select Purchase Order (Supplier Restock) type and set department to Store
+    const reqTypePo = document.getElementById('req-type-po');
+    if (reqTypePo) reqTypePo.checked = true;
+
+    const reqDeptHidden = document.getElementById('req-department');
+    if (reqDeptHidden) reqDeptHidden.value = 'Store';
+    const reqDeptDisplay = document.getElementById('req-dept-display');
+    if (reqDeptDisplay) reqDeptDisplay.textContent = 'Store (Warehouse)';
 
     // Clear existing item rows
     const container = document.getElementById('items-container');

@@ -128,7 +128,7 @@ state.js ──────┘                  │
 | Field        | Type      | Description                        |
 |--------------|-----------|------------------------------------|
 | `email`      | string    | User's email address               |
-| `role`       | string    | One of: User, Purchasing, General Manager, System Administrator |
+| `role`       | string    | One of: User, Store Keeper, Purchasing, General Manager, System Administrator |
 | `department` | string    | User's assigned department          |
 | `status`     | string    | Account status: 'Active' or 'Suspended' |
 | `createdAt`  | timestamp | Account creation time               |
@@ -136,6 +136,7 @@ state.js ──────┘                  │
 ### `requests`
 | Field            | Type      | Description                             |
 |------------------|-----------|-----------------------------------------|
+| `requestType`    | string    | 'Requisition' (decreases store stock on receipt) or 'Purchase Order' (restocks store stock) |
 | `department`     | string    | Requesting department                    |
 | `priority`       | string    | Normal, High, or Urgent                  |
 | `requiredBy`     | string    | Required delivery date (YYYY-MM-DD)      |

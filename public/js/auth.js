@@ -157,7 +157,7 @@ function attachFirestoreListeners() {
     state.unsubscribers.push(movementsUnsub);
 
     // Users (only for privileged roles)
-    if (state.userRole === 'System Administrator' || state.userRole === 'General Manager' || state.userRole === 'Purchasing') {
+    if (state.userRole === 'System Administrator' || state.userRole === 'General Manager' || state.userRole === 'Purchasing' || state.userRole === 'Store Keeper') {
         const usersUnsub = onSnapshot(collection(state.db, 'users'), (snapshot) => {
             state.allUsersCache = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
             if (state.userRole === 'System Administrator') {
