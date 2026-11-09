@@ -14,14 +14,16 @@ import {
     showUserModal, hideUserModal, renderUsersTable,
     renderDashboard, renderInventory, renderMyRequests,
     applyReportFilters, showIssueModal, hideIssueModal,
-    showStockLogModal, hideStockLogModal
+    showStockLogModal, hideStockLogModal,
+    refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix
 } from './ui.js';
 import {
     handleLogin, handleLogout, handleCreateUser,
     handleEditUser, handleSaveUserEdit, handleResetUserPassword, handleDeleteUser,
     handleRequestFormSubmit, updateRequestStatus, markRequestAsReceived,
     handleItemFormSubmit, deleteInventoryItem, handleIssueStock,
-    handleSetBudget, downloadReportPdf, downloadReportCsv, handleQuickOrderLowStock
+    handleSetBudget, downloadReportPdf, downloadReportCsv, handleQuickOrderLowStock,
+    handleAddDepartment, handleDeleteDepartment, handleSaveRolePermissions, handleResetRolePermissions
 } from './actions.js';
 import { initializeFirebase } from './auth.js';
 
@@ -35,17 +37,24 @@ document.addEventListener('DOMContentLoaded', () => {
     showSection('dashboard');
     addRequestItemRow();
 
-    // Patch department select with full list
-    const departmentSelect = document.getElementById('req-department');
-    if (departmentSelect) {
-        departmentSelect.innerHTML = DEPARTMENTS.map(d => `<option>${d}</option>`).join('');
-    }
+    // Populate department selects across the app
+    refreshDepartmentSelects();
 
     // --- Form Submissions ---
     document.getElementById('login-form').addEventListener('submit', handleLogin);
     document.getElementById('create-user-form').addEventListener('submit', handleCreateUser);
     document.getElementById('purchase-request-form').addEventListener('submit', handleRequestFormSubmit);
     document.getElementById('set-budget-btn').addEventListener('click', handleSetBudget);
+
+    // Hotel Settings & Role Permissions Forms
+    const addDeptForm = document.getElementById('add-dept-form');
+    if (addDeptForm) addDeptForm.addEventListener('submit', handleAddDepartment);
+
+    const permissionsForm = document.getElementById('permissions-matrix-form');
+    if (permissionsForm) permissionsForm.addEventListener('submit', handleSaveRolePermissions);
+
+    const resetPermsBtn = document.getElementById('reset-default-permissions-btn');
+    if (resetPermsBtn) resetPermsBtn.addEventListener('click', handleResetRolePermissions);
 
     // Modal form submits (dynamic — handled via event delegation)
     document.addEventListener('submit', (e) => {
@@ -317,6 +326,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const deleteUserBtn = e.target.closest('.delete-user-btn');
         if (deleteUserBtn) {
             handleDeleteUser(deleteUserBtn.dataset.id, deleteUserBtn.dataset.email);
+            return;
+        }
+
+        // Settings actions (delete department)
+        const deleteDeptBtn = e.target.closest('.delete-dept-btn');
+        if (deleteDeptBtn) {
+            handleDeleteDepartment(deleteDeptBtn.dataset.department);
             return;
         }
 

@@ -33,3 +33,34 @@ export const UNITS = ['Each', 'Box', 'Kg', 'Liter', 'Set'];
 
 /** Request priority levels */
 export const PRIORITIES = ['Normal', 'High', 'Urgent'];
+
+/** Configurable granular permissions across the application */
+export const AVAILABLE_PERMISSIONS = [
+    { id: 'create_request', label: 'Create Purchase Requests', desc: 'Can submit new itemized purchase requests' },
+    { id: 'view_all_requests', label: 'View All Requests', desc: 'Can view requests across all hotel departments' },
+    { id: 'approve_requests', label: 'Approve / Reject Requests', desc: 'Can review, approve, or reject pending requests' },
+    { id: 'manage_inventory', label: 'Manage Inventory & Stock Out', desc: 'Can add/edit items, issue goods to staff, and restock' },
+    { id: 'manage_budgets', label: 'Manage Department Budgets', desc: 'Can set and view monthly department spending limits' },
+    { id: 'view_reports', label: 'View Reports & Exports', desc: 'Can view report summaries and export PDF/CSV files' },
+    { id: 'manage_users', label: 'Manage Users & Accounts', desc: 'Can create, edit, suspend, and reset staff accounts' },
+    { id: 'manage_settings', label: 'Manage Hotel Settings', desc: 'Can add departments and customize role permissions' }
+];
+
+/** Default permissions map per role (used when not customized in Firestore) */
+export const DEFAULT_ROLE_PERMISSIONS = {
+    'System Administrator': [
+        'create_request', 'view_all_requests', 'approve_requests',
+        'manage_inventory', 'manage_budgets', 'view_reports',
+        'manage_users', 'manage_settings'
+    ],
+    'General Manager': [
+        'create_request', 'view_all_requests', 'approve_requests',
+        'manage_budgets', 'view_reports'
+    ],
+    'Purchasing': [
+        'create_request', 'view_all_requests', 'manage_inventory', 'view_reports'
+    ],
+    'User': [
+        'create_request'
+    ]
+};

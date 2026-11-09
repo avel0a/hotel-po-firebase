@@ -5,7 +5,7 @@
 
 import state from './state.js';
 import { doc, getDoc } from './firebase.js';
-import { DEPARTMENTS, ROLES } from './config.js';
+import { DEPARTMENTS, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS } from './config.js';
 
 // ============================================================================
 // Loading Overlay
@@ -51,13 +51,112 @@ export function getStatusBadge(status) {
 }
 
 // ============================================================================
-// Role-based Visibility
+// Permissions & Role-based Visibility
 // ============================================================================
 
+/**
+ * Checks whether a role has a given permission, using Firestore-saved permissions
+ * or falling back to DEFAULT_ROLE_PERMISSIONS.
+ */
+export function hasPermission(role, permissionName) {
+    if (role === 'System Administrator') return true;
+    const permissions = state.rolePermissions && state.rolePermissions[role]
+        ? state.rolePermissions[role]
+        : (DEFAULT_ROLE_PERMISSIONS[role] || []);
+    return permissions.includes(permissionName);
+}
+
+/**
+ * Returns current list of hotel departments (from Firestore or default DEPARTMENTS).
+ */
+export function getActiveDepartments() {
+    if (Array.isArray(state.departmentsCache) && state.departmentsCache.length > 0) {
+        return state.departmentsCache.map(d => d.name || d.id);
+    }
+    return DEPARTMENTS;
+}
+
+/**
+ * Refreshes all department dropdown selects across the application.
+ */
+export function refreshDepartmentSelects() {
+    const activeDepts = getActiveDepartments();
+    const optionsHtml = activeDepts.map(d => `<option value="${d}">${d}</option>`).join('');
+
+    const reqDept = document.getElementById('req-department');
+    if (reqDept) {
+        const curr = reqDept.value;
+        reqDept.innerHTML = optionsHtml;
+        if (curr && activeDepts.includes(curr)) reqDept.value = curr;
+    }
+
+    const overrideSelect = document.getElementById('req-department-override');
+    if (overrideSelect) {
+        const curr = overrideSelect.value;
+        overrideSelect.innerHTML = optionsHtml;
+        if (curr && activeDepts.includes(curr)) overrideSelect.value = curr;
+    }
+
+    const newUserDept = document.getElementById('new-user-department');
+    if (newUserDept) {
+        const curr = newUserDept.value;
+        newUserDept.innerHTML = optionsHtml;
+        if (curr && activeDepts.includes(curr)) newUserDept.value = curr;
+    }
+
+    const budgetDept = document.getElementById('budget-department');
+    if (budgetDept) {
+        const curr = budgetDept.value;
+        budgetDept.innerHTML = optionsHtml;
+        if (curr && activeDepts.includes(curr)) budgetDept.value = curr;
+    }
+
+    const editUserDept = document.getElementById('edit-user-department');
+    if (editUserDept) {
+        const curr = editUserDept.value;
+        editUserDept.innerHTML = optionsHtml;
+        if (curr && activeDepts.includes(curr)) editUserDept.value = curr;
+    }
+}
+
 export function updateUIVisibility() {
+    // Permission map for primary navigation sections
+    const sectionPermissionMap = {
+        'approvals': 'approve_requests',
+        'budgeting': 'manage_budgets',
+        'inventory': 'manage_inventory',
+        'reports': 'view_reports',
+        'user-management': 'manage_users',
+        'settings': 'manage_settings'
+    };
+
+    // Update navigation items based on dynamic role permissions
+    document.querySelectorAll('.nav-link[data-section]').forEach(link => {
+        const section = link.dataset.section;
+        const requiredPerm = sectionPermissionMap[section];
+        const li = link.closest('li');
+        if (li && requiredPerm) {
+            const hasAccess = hasPermission(state.userRole, requiredPerm);
+            li.style.display = hasAccess ? 'list-item' : 'none';
+        }
+    });
+
+    // Update elements with .requires-role or data-permission
     document.querySelectorAll('.requires-role').forEach(el => {
-        const requiredRoles = el.dataset.role.split(',').map(r => r.trim());
-        const isVisible = state.userRole === 'System Administrator' || requiredRoles.includes(state.userRole);
+        if (el.tagName === 'LI' && el.querySelector('.nav-link[data-section]')) {
+            // Handled above
+            return;
+        }
+
+        let isVisible = false;
+        if (state.userRole === 'System Administrator') {
+            isVisible = true;
+        } else if (el.dataset.permission) {
+            isVisible = hasPermission(state.userRole, el.dataset.permission);
+        } else if (el.dataset.role) {
+            const requiredRoles = el.dataset.role.split(',').map(r => r.trim());
+            isVisible = requiredRoles.includes(state.userRole);
+        }
 
         if (isVisible) {
             if (el.tagName === 'LI') el.style.display = 'list-item';
@@ -67,6 +166,107 @@ export function updateUIVisibility() {
             el.style.display = 'none';
         }
     });
+}
+
+// ============================================================================
+// Settings — Departments & Permissions Matrix
+// ============================================================================
+
+/**
+ * Renders the active departments list in the Settings section.
+ */
+export function renderDepartmentsList() {
+    const container = document.getElementById('departments-list-container');
+    const badge = document.getElementById('dept-count-badge');
+    if (!container) return;
+
+    const activeDepts = getActiveDepartments();
+    if (badge) badge.textContent = `${activeDepts.length} Department${activeDepts.length === 1 ? '' : 's'}`;
+
+    if (activeDepts.length === 0) {
+        container.innerHTML = `
+            <div class="text-center py-8 text-gray-400 text-xs">
+                <i class="fas fa-building text-2xl mb-2 opacity-50"></i>
+                <p>No departments configured.</p>
+            </div>
+        `;
+        return;
+    }
+
+    const usersByDept = (state.allUsersCache || []).reduce((acc, u) => {
+        if (u.department) acc[u.department] = (acc[u.department] || 0) + 1;
+        return acc;
+    }, {});
+
+    const reqsByDept = (state.allRequestsCache || []).reduce((acc, r) => {
+        if (r.department) acc[r.department] = (acc[r.department] || 0) + 1;
+        return acc;
+    }, {});
+
+    container.innerHTML = activeDepts.map(dept => {
+        const userCount = usersByDept[dept] || 0;
+        const reqCount = reqsByDept[dept] || 0;
+
+        return `
+            <div class="px-4 py-3 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors">
+                <div class="flex items-center space-x-3">
+                    <div class="w-8 h-8 rounded-lg bg-hotel-primary/10 dark:bg-hotel-primary/20 text-hotel-primary dark:text-blue-300 flex items-center justify-center font-bold text-xs">
+                        <i class="fas fa-hotel text-xs"></i>
+                    </div>
+                    <div>
+                        <div class="text-sm font-semibold text-gray-800 dark:text-gray-100">${dept}</div>
+                        <div class="text-xs text-gray-500 dark:text-gray-400">
+                            <span>${userCount} staff</span> • <span>${reqCount} requests</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <button type="button" class="delete-dept-btn p-1.5 text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors rounded hover:bg-red-50 dark:hover:bg-red-950/40" data-department="${dept}" title="Delete Department">
+                        <i class="fas fa-trash-alt text-xs"></i>
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Renders the role permissions checkboxes matrix in the Settings section.
+ */
+export function renderPermissionsMatrix() {
+    const tbody = document.getElementById('permissions-matrix-body');
+    if (!tbody) return;
+
+    const roles = ['User', 'Purchasing', 'General Manager', 'System Administrator'];
+
+    tbody.innerHTML = AVAILABLE_PERMISSIONS.map(perm => {
+        const cellsHtml = roles.map(role => {
+            const isChecked = hasPermission(role, perm.id);
+            const isAdmin = role === 'System Administrator';
+
+            return `
+                <td class="px-2 py-3 text-center">
+                    <input type="checkbox" 
+                           class="perm-checkbox w-4 h-4 text-hotel-primary rounded border-gray-300 dark:border-gray-600 focus:ring-hotel-accent cursor-pointer ${isAdmin ? 'opacity-60 cursor-not-allowed' : ''}" 
+                           data-role="${role}" 
+                           data-permission="${perm.id}" 
+                           ${isChecked ? 'checked' : ''} 
+                           ${isAdmin ? 'disabled' : ''}
+                           title="${isAdmin ? 'System Administrator always has full access' : `${role} - ${perm.label}`}">
+                </td>
+            `;
+        }).join('');
+
+        return `
+            <tr class="hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors">
+                <td class="px-4 py-3">
+                    <div class="text-xs font-semibold text-gray-800 dark:text-gray-100">${perm.label}</div>
+                    <div class="text-[11px] text-gray-500 dark:text-gray-400">${perm.desc}</div>
+                </td>
+                ${cellsHtml}
+            </tr>
+        `;
+    }).join('');
 }
 
 // ============================================================================
@@ -100,9 +300,10 @@ export function showSection(sectionId) {
         if (reqDeptDisplay) reqDeptDisplay.textContent = userDept;
         if (reqDeptHidden) reqDeptHidden.value = userDept;
 
-        // Populate override dropdown with departments
+        // Populate override dropdown with active departments
+        const activeDepts = getActiveDepartments();
         if (overrideSelect) {
-            overrideSelect.innerHTML = DEPARTMENTS.map(d => `<option value="${d}" ${d === userDept ? 'selected' : ''}>${d}</option>`).join('');
+            overrideSelect.innerHTML = activeDepts.map(d => `<option value="${d}" ${d === userDept ? 'selected' : ''}>${d}</option>`).join('');
         }
 
         // Only GM and System Admin have permission to order on behalf of another department
@@ -115,6 +316,11 @@ export function showSection(sectionId) {
                 overrideContainer.classList.add('hidden');
             }
         }
+    }
+
+    if (sectionId === 'settings') {
+        renderDepartmentsList();
+        renderPermissionsMatrix();
     }
 
     if (sectionId === 'reports') {
@@ -231,7 +437,7 @@ export function showIssueModal(item) {
     const modal = document.getElementById('issue-modal');
     if (!modal) return;
 
-    const deptOptions = DEPARTMENTS.map(d => `<option value="${d}">${d}</option>`).join('');
+    const deptOptions = getActiveDepartments().map(d => `<option value="${d}">${d}</option>`).join('');
 
     modal.innerHTML = `
         <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md transition-colors duration-300 overflow-hidden mx-4">
@@ -1140,7 +1346,7 @@ export function showUserModal(user) {
     if (!modal) return;
 
     const roleOptions = ROLES.map(r => `<option value="${r}" ${r === user.role ? 'selected' : ''}>${r}</option>`).join('');
-    const deptOptions = DEPARTMENTS.map(d => `<option value="${d}" ${d === user.department ? 'selected' : ''}>${d}</option>`).join('');
+    const deptOptions = getActiveDepartments().map(d => `<option value="${d}" ${d === user.department ? 'selected' : ''}>${d}</option>`).join('');
     const userStatus = user.status || 'Active';
 
     modal.innerHTML = `

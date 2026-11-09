@@ -19,6 +19,7 @@ A full-featured **Inventory & Purchase Request Management** web application buil
 - **💰 Department Budgeting** — Set monthly budgets per department, track spending vs. allocation with visual progress bars and charts
 - **📈 Reports & PDF/Excel Export** — Filter by date, status, user; generate professional PDF reports or download Excel/CSV data files
 - **👤 User Management** — Admins create users seamlessly without signing out; edit roles, departments, and account status (Active/Suspended); send password reset emails; delete accounts; search users in real time
+- **⚙️ Settings & Role Permissions** — Dynamic Department Management (add/delete hotel departments that propagate instantly across the app); Granular Role Permissions matrix to customize capabilities per role in real time with automatic fail-safe Admin protection
 
 ### Technical Features
 - 🔐 Firebase Authentication (email/password)

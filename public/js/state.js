@@ -23,6 +23,8 @@ const state = {
     inventoryItemsCache: [],
     budgetsCache: [],
     stockMovementsCache: [],
+    departmentsCache: [],
+    rolePermissions: {},
 
     // Chart.js instances (destroyed and recreated on data change)
     requestsStatusChart: null,

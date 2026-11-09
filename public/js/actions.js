@@ -4,7 +4,7 @@
  */
 
 import state from './state.js';
-import { firebaseConfig } from './config.js';
+import { firebaseConfig, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS } from './config.js';
 import {
     signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut,
     sendPasswordResetEmail, initializeApp, deleteApp, getAuth,
@@ -14,7 +14,8 @@ import {
 import {
     showLoadingOverlay, hideLoadingOverlay, showNotification,
     showSection, showConfirmModal, addRequestItemRow, updateTotalCost,
-    hideItemModal, showUserModal, hideUserModal, hideIssueModal
+    hideItemModal, showUserModal, hideUserModal, hideIssueModal,
+    hasPermission, getActiveDepartments, renderPermissionsMatrix, updateUIVisibility
 } from './ui.js';
 
 // ============================================================================
@@ -64,7 +65,7 @@ export async function handleLogout() {
  */
 export async function handleCreateUser(e) {
     e.preventDefault();
-    if (state.userRole !== 'System Administrator') {
+    if (!hasPermission(state.userRole, 'manage_users')) {
         showNotification("You don't have permission to create users.", true);
         return;
     }
@@ -117,7 +118,7 @@ export async function handleCreateUser(e) {
  * Opens edit modal for a user.
  */
 export function handleEditUser(userId) {
-    if (state.userRole !== 'System Administrator') {
+    if (!hasPermission(state.userRole, 'manage_users')) {
         showNotification("You don't have permission to edit users.", true);
         return;
     }
@@ -134,7 +135,7 @@ export function handleEditUser(userId) {
  */
 export async function handleSaveUserEdit(e) {
     e.preventDefault();
-    if (state.userRole !== 'System Administrator') {
+    if (!hasPermission(state.userRole, 'manage_users')) {
         showNotification("You don't have permission to edit users.", true);
         return;
     }
@@ -169,7 +170,7 @@ export async function handleSaveUserEdit(e) {
  * Sends a password reset email to the specified user.
  */
 export function handleResetUserPassword(userId, userEmail) {
-    if (state.userRole !== 'System Administrator') {
+    if (!hasPermission(state.userRole, 'manage_users')) {
         showNotification("You don't have permission to reset user passwords.", true);
         return;
     }
@@ -191,7 +192,7 @@ export function handleResetUserPassword(userId, userEmail) {
  * Deletes a user document from Firestore.
  */
 export function handleDeleteUser(userId, userEmail) {
-    if (state.userRole !== 'System Administrator') {
+    if (!hasPermission(state.userRole, 'manage_users')) {
         showNotification("You don't have permission to delete users.", true);
         return;
     }
@@ -223,6 +224,10 @@ export function handleDeleteUser(userId, userEmail) {
  */
 export async function handleRequestFormSubmit(e) {
     e.preventDefault();
+    if (!hasPermission(state.userRole, 'create_request')) {
+        showNotification("You don't have permission to submit purchase requests.", true);
+        return;
+    }
     const items = Array.from(document.querySelectorAll('#items-container .item-row')).map(row => ({
         name: row.querySelector('.item-name').value.trim(),
         quantity: Number(row.querySelector('.item-quantity').value),
@@ -280,8 +285,8 @@ export async function handleRequestFormSubmit(e) {
  * Updates request status (Approve / Reject) with optional approval notes.
  */
 export async function updateRequestStatus(id, newStatus, approvalNotes = '') {
-    if (state.userRole !== 'General Manager' && state.userRole !== 'System Administrator') {
-        showNotification("You don't have permission to do this.", true);
+    if (!hasPermission(state.userRole, 'approve_requests')) {
+        showNotification("You don't have permission to approve or reject requests.", true);
         return;
     }
     showLoadingOverlay();
@@ -381,8 +386,8 @@ export async function markRequestAsReceived(requestId) {
  */
 export async function handleItemFormSubmit(e) {
     e.preventDefault();
-    if (state.userRole !== 'System Administrator' && state.userRole !== 'Purchasing') {
-        showNotification("You don't have permission to do this.", true);
+    if (!hasPermission(state.userRole, 'manage_inventory')) {
+        showNotification("You don't have permission to manage inventory items.", true);
         return;
     }
     const itemId = document.getElementById('item-id').value;
@@ -429,8 +434,8 @@ export async function handleItemFormSubmit(e) {
  * Deletes an inventory item after confirmation.
  */
 export async function deleteInventoryItem(id) {
-    if (state.userRole !== 'System Administrator' && state.userRole !== 'Purchasing') {
-        showNotification("You don't have permission to do this.", true);
+    if (!hasPermission(state.userRole, 'manage_inventory')) {
+        showNotification("You don't have permission to delete inventory items.", true);
         return;
     }
     showConfirmModal("Are you sure you want to delete this item? This action cannot be undone.", async () => {
@@ -453,7 +458,7 @@ export async function deleteInventoryItem(id) {
  */
 export async function handleIssueStock(e) {
     e.preventDefault();
-    if (state.userRole !== 'System Administrator' && state.userRole !== 'Purchasing') {
+    if (!hasPermission(state.userRole, 'manage_inventory')) {
         showNotification("You don't have permission to issue inventory items.", true);
         return;
     }
@@ -524,7 +529,7 @@ export async function handleIssueStock(e) {
  * Handles setting a department budget.
  */
 export async function handleSetBudget() {
-    if (state.userRole !== 'General Manager' && state.userRole !== 'System Administrator') {
+    if (!hasPermission(state.userRole, 'manage_budgets')) {
         showNotification("You don't have permission to set budgets.", true);
         return;
     }
@@ -563,6 +568,10 @@ export async function handleSetBudget() {
  * Generates and downloads a PDF report.
  */
 export async function downloadReportPdf() {
+    if (!hasPermission(state.userRole, 'view_reports')) {
+        showNotification("You don't have permission to export reports.", true);
+        return;
+    }
     try {
         showNotification("Generating PDF...", false);
         if (window.jspdf && window.jspdf.jsPDF && window.jspdf_autotable && !window.jspdf.jsPDF.API.autoTable) {
@@ -651,6 +660,10 @@ export async function downloadReportPdf() {
  * Generates and downloads a CSV report from the currently filtered requests.
  */
 export function downloadReportCsv() {
+    if (!hasPermission(state.userRole, 'view_reports')) {
+        showNotification("You don't have permission to export reports.", true);
+        return;
+    }
     try {
         if (!Array.isArray(state.currentFilteredRequests) || state.currentFilteredRequests.length === 0) {
             showNotification("No requests found with current filters. Nothing to export.", true);
@@ -754,4 +767,153 @@ export function handleQuickOrderLowStock() {
     }
 
     showNotification(`${lowStockItems.length} low-stock item(s) added to new request. Review and submit.`, false);
+}
+
+// ============================================================================
+// Hotel Settings & Permissions Actions
+// ============================================================================
+
+/**
+ * Adds a new department to Firestore.
+ */
+export async function handleAddDepartment(e) {
+    e.preventDefault();
+    if (!hasPermission(state.userRole, 'manage_settings')) {
+        showNotification("You do not have permission to manage hotel settings.", true);
+        return;
+    }
+
+    const input = document.getElementById('new-dept-name');
+    if (!input) return;
+    const deptName = input.value.trim();
+
+    if (!deptName) {
+        showNotification("Department name cannot be empty.", true);
+        return;
+    }
+
+    // Check duplicate
+    const activeDepts = getActiveDepartments();
+    if (activeDepts.some(d => d.toLowerCase() === deptName.toLowerCase())) {
+        showNotification(`Department "${deptName}" already exists.`, true);
+        return;
+    }
+
+    showLoadingOverlay();
+    try {
+        await setDoc(doc(state.db, 'departments', deptName), {
+            name: deptName,
+            createdAt: serverTimestamp(),
+            createdBy: state.userId || 'system'
+        });
+        input.value = '';
+        showNotification(`Department "${deptName}" added successfully!`);
+    } catch (error) {
+        console.error("Error adding department:", error);
+        showNotification("Failed to add department.", true);
+    } finally {
+        hideLoadingOverlay();
+    }
+}
+
+/**
+ * Deletes a department from Firestore after user confirmation.
+ */
+export async function handleDeleteDepartment(deptName) {
+    if (!hasPermission(state.userRole, 'manage_settings')) {
+        showNotification("You do not have permission to delete departments.", true);
+        return;
+    }
+
+    const usersInDept = (state.allUsersCache || []).filter(u => u.department === deptName);
+    const reqsInDept = (state.allRequestsCache || []).filter(r => r.department === deptName);
+
+    let warning = `Are you sure you want to delete department "${deptName}"?`;
+    if (usersInDept.length > 0 || reqsInDept.length > 0) {
+        warning += ` Note: ${usersInDept.length} staff member(s) and ${reqsInDept.length} request(s) are linked to this department.`;
+    }
+
+    showConfirmModal(warning, async () => {
+        showLoadingOverlay();
+        try {
+            await deleteDoc(doc(state.db, 'departments', deptName));
+            showNotification(`Department "${deptName}" deleted.`);
+        } catch (error) {
+            console.error("Error deleting department:", error);
+            showNotification("Failed to delete department.", true);
+        } finally {
+            hideLoadingOverlay();
+        }
+    });
+}
+
+/**
+ * Saves customized role permissions matrix to Firestore settings/permissions.
+ */
+export async function handleSaveRolePermissions(e) {
+    e.preventDefault();
+    if (!hasPermission(state.userRole, 'manage_settings')) {
+        showNotification("You do not have permission to configure role permissions.", true);
+        return;
+    }
+
+    showLoadingOverlay();
+    try {
+        const matrixForm = document.getElementById('permissions-matrix-form');
+        if (!matrixForm) return;
+
+        const updatedPermissions = {};
+        ROLES.forEach(r => { updatedPermissions[r] = []; });
+
+        const checkboxes = matrixForm.querySelectorAll('.perm-checkbox');
+        checkboxes.forEach(cb => {
+            const role = cb.dataset.role;
+            const perm = cb.dataset.permission;
+            if (cb.checked && role && perm) {
+                if (!updatedPermissions[role]) updatedPermissions[role] = [];
+                if (!updatedPermissions[role].includes(perm)) {
+                    updatedPermissions[role].push(perm);
+                }
+            }
+        });
+
+        // Ensure System Administrator always retains ALL available permissions (safety guarantee)
+        updatedPermissions['System Administrator'] = AVAILABLE_PERMISSIONS.map(p => p.id);
+
+        await setDoc(doc(state.db, 'settings', 'permissions'), updatedPermissions);
+        state.rolePermissions = updatedPermissions;
+        updateUIVisibility();
+        showNotification("Role permissions updated successfully!");
+    } catch (error) {
+        console.error("Error saving role permissions:", error);
+        showNotification("Failed to save permissions.", true);
+    } finally {
+        hideLoadingOverlay();
+    }
+}
+
+/**
+ * Resets all role permissions to standard hotel defaults.
+ */
+export function handleResetRolePermissions() {
+    if (!hasPermission(state.userRole, 'manage_settings')) {
+        showNotification("You do not have permission to configure role permissions.", true);
+        return;
+    }
+
+    showConfirmModal("Are you sure you want to reset all role permissions to standard hotel defaults?", async () => {
+        showLoadingOverlay();
+        try {
+            await setDoc(doc(state.db, 'settings', 'permissions'), DEFAULT_ROLE_PERMISSIONS);
+            state.rolePermissions = { ...DEFAULT_ROLE_PERMISSIONS };
+            updateUIVisibility();
+            renderPermissionsMatrix();
+            showNotification("Role permissions reset to hotel defaults.");
+        } catch (error) {
+            console.error("Error resetting permissions:", error);
+            showNotification("Failed to reset permissions.", true);
+        } finally {
+            hideLoadingOverlay();
+        }
+    });
 }

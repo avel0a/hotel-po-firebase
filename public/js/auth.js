@@ -5,7 +5,7 @@
 
 import state from './state.js';
 import {
-    initializeFirebaseApp, onAuthStateChanged,
+    initializeFirebaseApp, onAuthStateChanged, signOut,
     doc, collection, onSnapshot, query, where, orderBy, getDoc, setDoc, serverTimestamp
 } from './firebase.js';
 import {
@@ -14,7 +14,8 @@ import {
     renderDashboard, renderDashboardCharts, updateStats,
     renderMyRequests, renderApprovals, renderInventory,
     renderBudgets, renderUsersTable, populateItemNameDatalist,
-    populateReportFilters, applyReportFilters, renderStockMovements
+    populateReportFilters, applyReportFilters, renderStockMovements,
+    refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix
 } from './ui.js';
 
 /**
@@ -57,6 +58,17 @@ function setupAuthListener() {
  */
 async function loadUserProfile(user) {
     state.userId = user.uid;
+
+    // Preload permissions if saved in Firestore
+    try {
+        const permSnap = await getDoc(doc(state.db, 'settings', 'permissions'));
+        if (permSnap.exists()) {
+            state.rolePermissions = permSnap.data();
+        }
+    } catch (e) {
+        console.warn("Could not preload role permissions:", e);
+    }
+
     const userRef = doc(state.db, `users/${state.userId}`);
     const userDoc = await getDoc(userRef);
     if (userDoc.exists()) {
@@ -156,4 +168,24 @@ function attachFirestoreListeners() {
         }, error => console.error("Error listening to users:", error));
         state.unsubscribers.push(usersUnsub);
     }
+
+    // Hotel Departments
+    const deptsUnsub = onSnapshot(query(collection(state.db, 'departments'), orderBy("name")), (snapshot) => {
+        state.departmentsCache = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        refreshDepartmentSelects();
+        renderDepartmentsList();
+    }, error => console.error("Error listening to departments:", error));
+    state.unsubscribers.push(deptsUnsub);
+
+    // Role Permissions Settings
+    const permUnsub = onSnapshot(doc(state.db, 'settings', 'permissions'), (snapshot) => {
+        if (snapshot.exists()) {
+            state.rolePermissions = snapshot.data();
+        } else {
+            state.rolePermissions = {};
+        }
+        updateUIVisibility();
+        renderPermissionsMatrix();
+    }, error => console.error("Error listening to role permissions:", error));
+    state.unsubscribers.push(permUnsub);
 }

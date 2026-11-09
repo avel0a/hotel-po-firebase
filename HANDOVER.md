@@ -28,7 +28,7 @@ This is a **web-based inventory and purchase request management system** designe
 
 ### Firebase Services in Use
 - ✅ **Firebase Authentication** — Email/password sign-in
-- ✅ **Cloud Firestore** — Primary database (4 collections)
+- ✅ **Cloud Firestore** — Primary database (6 collections: users, requests, inventory, budgets, stock_movements, departments + settings)
 - ✅ **Firebase Hosting** — Static file hosting
 - ✅ **Cloud Functions** — 1 function (`updateBudgetOnApproval`)
 
@@ -64,9 +64,14 @@ This is a **web-based inventory and purchase request management system** designe
 │  │ (email/pwd)  │  │                          │  │
 │  └─────────────┘  │  • users                  │  │
 │                    │  • requests               │  │
-│  ┌─────────────┐  │  • inventory              │  │
-│  │  Hosting    │  │  • budgets                │  │
-│  │ (static)    │  └──────────────────────────┘  │
+│  ┌─────────────┐  │  • users                  │  │
+│  │  Hosting    │  │  • requests               │  │
+│  │ (static)    │  │  • inventory              │  │
+│  └─────────────┘  │  • budgets                │  │
+│                   │  • stock_movements        │  │
+│                   │  • departments            │  │
+│                   │  • settings/permissions   │  │
+│                   └──────────────────────────┘  │
 │  └─────────────┘                                │
 │                                                 │
 │  ┌──────────────────────────────────────────┐   │
@@ -182,6 +187,22 @@ state.js ──────┘                  │
 | `issuedBy`      | string    | UID of user authorizing movement          |
 | `issuedByEmail` | string    | Email of user authorizing movement        |
 | `timestamp`     | timestamp | Server timestamp                          |
+
+### `departments`
+| Field        | Type      | Description                               |
+|--------------|-----------|-------------------------------------------|
+| `name`       | string    | Department name (e.g., 'Laundry', 'SPA')   |
+| `createdAt`  | timestamp | When department was created                |
+| `createdBy`  | string    | UID of the user who created it             |
+
+**Document ID pattern:** `{DepartmentName}` (e.g., `Kitchen`, `Laundry`)
+
+### `settings` (`settings/permissions` document)
+| Field                 | Type     | Description                                      |
+|-----------------------|----------|--------------------------------------------------|
+| `[RoleName]`          | array    | Array of permission ID strings granted to role    |
+
+Available granular permissions: `create_request`, `view_all_requests`, `approve_requests`, `manage_inventory`, `manage_budgets`, `view_reports`, `manage_users`, `manage_settings`.
 
 ### Required Composite Index
 Firestore requires a composite index for the requests query:
