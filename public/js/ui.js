@@ -438,7 +438,7 @@ export function showItemModal(item = null) {
                             <div><label for="item-stock" class="block text-sm font-medium text-gray-700 mb-1">Current Stock</label><input type="number" id="item-stock" class="w-full p-2 border border-gray-300 rounded-md transition-colors duration-300" required></div>
                             <div><label for="item-min" class="block text-sm font-medium text-gray-700 mb-1">Minimum Level</label><input type="number" id="item-min" class="w-full p-2 border border-gray-300 rounded-md transition-colors duration-300" required></div>
                         </div>
-                        <div><label for="item-price" class="block text-sm font-medium text-gray-700 mb-1">Price ($)</label><input type="number" step="0.01" id="item-price" class="w-full p-2 border border-gray-300 rounded-md transition-colors duration-300" required></div>
+                        <div><label for="item-price" class="block text-sm font-medium text-gray-700 mb-1">Price (Birr)</label><input type="number" step="0.01" id="item-price" class="w-full p-2 border border-gray-300 rounded-md transition-colors duration-300" required></div>
                     </div>
                     <div class="flex justify-end space-x-3 mt-6">
                         <button type="button" id="cancel-item-modal-btn" class="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700 transition-colors">Cancel</button>
@@ -628,7 +628,7 @@ export function showReceiveModal(item = null) {
                         <input type="number" id="receive-quantity" min="1" placeholder="e.g. 50" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors" required>
                     </div>
                     <div>
-                        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Unit Price ($ / Birr)</label>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Unit Price (Birr)</label>
                         <input type="number" step="0.01" min="0" id="receive-price" value="${item ? (item.price || '') : ''}" placeholder="e.g. 250" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors">
                     </div>
                 </div>
@@ -877,7 +877,7 @@ export function showOrderPOModal(req) {
     const itemsSummary = (req.items || []).map(i =>
         `<li class="flex justify-between text-xs py-1 border-b border-gray-100 dark:border-gray-700">
             <span class="font-medium text-gray-800 dark:text-gray-200">${i.name} (${i.quantity} ${i.unit || ''})</span>
-            <span class="text-gray-600 dark:text-gray-400">$${((i.price || 0) * (i.quantity || 1)).toFixed(2)}</span>
+            <span class="text-gray-600 dark:text-gray-400">Birr ${((i.price || 0) * (i.quantity || 1)).toFixed(2)}</span>
         </li>`
     ).join('');
 
@@ -904,7 +904,7 @@ export function showOrderPOModal(req) {
                 <div class="bg-purple-50/60 dark:bg-purple-950/20 p-3.5 rounded-lg border border-purple-200/60 dark:border-purple-900/40 text-xs">
                     <div class="flex justify-between mb-1.5">
                         <span class="font-semibold text-gray-700 dark:text-gray-300">Purchase Order: #${req.id.substring(0, 8)}</span>
-                        <span class="font-bold text-purple-700 dark:text-purple-300">Total: $${(req.totalCost || 0).toFixed(2)}</span>
+                        <span class="font-bold text-purple-700 dark:text-purple-300">Total: Birr ${(req.totalCost || 0).toFixed(2)}</span>
                     </div>
                     <ul class="max-h-28 overflow-y-auto">
                         ${itemsSummary}
@@ -1296,8 +1296,8 @@ export function showRequestDetailsModal(req) {
             <tr class="border-b border-gray-150 dark:border-gray-700/60 text-xs">
                 <td class="py-2 px-3 font-medium text-gray-900 dark:text-gray-100">${i.name}</td>
                 <td class="py-2 px-3 text-center text-gray-700 dark:text-gray-300">${i.quantity} ${i.unit || ''}</td>
-                <td class="py-2 px-3 text-right text-gray-600 dark:text-gray-400">$${(i.price || 0).toFixed(2)}</td>
-                <td class="py-2 px-3 text-right font-semibold text-gray-800 dark:text-gray-200">$${((i.price || 0) * (i.quantity || 1)).toFixed(2)}</td>
+                <td class="py-2 px-3 text-right text-gray-600 dark:text-gray-400">Birr ${(i.price || 0).toFixed(2)}</td>
+                <td class="py-2 px-3 text-right font-semibold text-gray-800 dark:text-gray-200">Birr ${((i.price || 0) * (i.quantity || 1)).toFixed(2)}</td>
                 <td class="py-2 px-3 text-center font-semibold text-slate-700 dark:text-slate-300">${progressText}</td>
             </tr>
         `;
@@ -1337,7 +1337,7 @@ export function showRequestDetailsModal(req) {
                     </div>
                     <div>
                         <span class="text-gray-500 dark:text-gray-400 block">Total Estimated</span>
-                        <span class="font-extrabold text-gray-900 dark:text-gray-100">$${(req.totalCost || 0).toFixed(2)}</span>
+                        <span class="font-extrabold text-gray-900 dark:text-gray-100">Birr ${(req.totalCost || 0).toFixed(2)}</span>
                     </div>
                 </div>
 
@@ -1455,7 +1455,7 @@ export function addRequestItemRow() {
         </div>
         <div class="col-span-3 md:col-span-2">
             <label class="block text-sm font-medium text-gray-700 mb-1">Subtotal</label>
-            <span class="item-subtotal block p-2 text-gray-800 dark:text-gray-200 font-medium">$0.00</span>
+            <span class="item-subtotal block p-2 text-gray-800 dark:text-gray-200 font-medium">Birr 0.00</span>
         </div>
         <div class="col-span-12 md:col-span-1 flex justify-end items-end pb-1">
             <button type="button" class="remove-item-btn p-2 text-red-500 hover:text-red-700 transition-colors" aria-label="Remove item"><i class="fas fa-trash"></i></button>
@@ -1476,7 +1476,7 @@ export function updateItemSubtotal(row) {
     const price = parseFloat(row.querySelector('.item-price').value) || 0;
     const quantity = parseInt(row.querySelector('.item-quantity').value) || 0;
     const subtotal = price * quantity;
-    row.querySelector('.item-subtotal').textContent = `$${subtotal.toFixed(2)}`;
+    row.querySelector('.item-subtotal').textContent = `Birr ${subtotal.toFixed(2)}`;
     updateTotalCost();
 }
 
@@ -1486,7 +1486,7 @@ export function updateTotalCost() {
         const quantity = parseInt(row.querySelector('.item-quantity').value) || 0;
         return acc + (price * quantity);
     }, 0);
-    document.getElementById('total-cost-display').textContent = `$${total.toFixed(2)}`;
+    document.getElementById('total-cost-display').textContent = `Birr ${total.toFixed(2)}`;
 }
 
 // ============================================================================
@@ -1741,7 +1741,7 @@ export function renderMyRequests(requests, searchTerm = '') {
                         ${itemsSummary}
                     </td>
                     <td class="px-4 py-3 whitespace-nowrap text-xs font-bold text-gray-900 dark:text-gray-100">
-                        $${(req.totalCost || 0).toFixed(2)}
+                        Birr ${(req.totalCost || 0).toFixed(2)}
                     </td>
                     <td class="px-4 py-3 whitespace-nowrap text-xs">
                         <span class="font-semibold text-gray-700 dark:text-gray-300">${req.priority}</span>
@@ -1783,7 +1783,7 @@ export function renderApprovals(requests) {
                 ? '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-200 border border-emerald-300 dark:border-emerald-700"><i class="fas fa-truck-loading mr-1"></i>Purchase Order (Vendor Stock In)</span>'
                 : '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-200 border border-blue-300 dark:border-blue-700"><i class="fas fa-hand-holding-box mr-1"></i>Dept Requisition (Store Stock Out)</span>';
 
-            const itemsList = (req.items || []).map(i => `<li>${i.name} - ${i.quantity} ${i.unit || ''} (@ $${(i.price || 0).toFixed(2)})</li>`).join('');
+            const itemsList = (req.items || []).map(i => `<li>${i.name} - ${i.quantity} ${i.unit || ''} (@ Birr ${(i.price || 0).toFixed(2)})</li>`).join('');
             const requestedByEmail = state.allUsersCache.find(u => u.id === req.createdBy)?.email || req.createdByEmail || 'N/A';
             return `
                 <div class="approval-card border rounded-lg overflow-hidden bg-white dark:bg-gray-800 hover:shadow-md transition-shadow duration-200">
@@ -1805,7 +1805,7 @@ export function renderApprovals(requests) {
                             <div>
                                 <h4 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Items Requested</h4>
                                 <ul class="list-disc pl-5 text-sm text-gray-700 dark:text-gray-300 space-y-0.5">${itemsList}</ul>
-                                <p class="font-extrabold text-sm text-gray-900 dark:text-gray-100 mt-2">Total Estimated: $${(req.totalCost || 0).toFixed(2)}</p>
+                                <p class="font-extrabold text-sm text-gray-900 dark:text-gray-100 mt-2">Total Estimated: Birr ${(req.totalCost || 0).toFixed(2)}</p>
                             </div>
                             <div>
                                 <h4 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Notes & Justification</h4>
@@ -1886,7 +1886,7 @@ export function renderInventory(items, searchTerm = '') {
             <tr class="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
                 <td class="px-6 py-4 whitespace-nowrap">${item.name}</td>
                 <td class="px-6 py-4 whitespace-nowrap">${item.category}</td>
-                <td class="px-6 py-4 whitespace-nowrap">$${(item.price || 0).toFixed(2)}</td>
+                <td class="px-6 py-4 whitespace-nowrap">Birr ${(item.price || 0).toFixed(2)}</td>
                 <td class="px-6 py-4 whitespace-nowrap">${item.stock}</td>
                 <td class="px-6 py-4 whitespace-nowrap">${item.min}</td>
                 <td class="px-6 py-4 whitespace-nowrap"><span class="px-2 py-1 text-xs rounded-full bg-${color}-100 text-${color}-800 dark:bg-${color}-700 dark:text-${color}-200">${status}</span></td>
@@ -1969,7 +1969,7 @@ export function renderReports(requestsToRender) {
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
                     <td class="px-4 py-2">${date}</td>
                     <td class="px-4 py-2">${req.department}</td>
-                    <td class="px-4 py-2">$${(req.totalCost || 0).toFixed(2)}</td>
+                    <td class="px-4 py-2">Birr ${(req.totalCost || 0).toFixed(2)}</td>
                     <td class="px-4 py-2 text-sm text-gray-600 dark:text-gray-300">${requestedByEmail}</td>
                     <td class="px-4 py-2">${getStatusBadge(req.status)}</td>
                 </tr>
@@ -2077,9 +2077,9 @@ export function renderBudgets(budgets, requests) {
             <tr class="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
                 <td class="px-6 py-4 whitespace-nowrap">${b.month}</td>
                 <td class="px-6 py-4 whitespace-nowrap">${b.department}</td>
-                <td class="px-6 py-4 whitespace-nowrap">$${b.amount.toFixed(2)}</td>
-                <td class="px-6 py-4 whitespace-nowrap">$${b.spent.toFixed(2)}</td>
-                <td class="px-6 py-4 whitespace-nowrap ${remainingColor}">$${b.remaining.toFixed(2)}</td>
+                <td class="px-6 py-4 whitespace-nowrap">Birr ${b.amount.toFixed(2)}</td>
+                <td class="px-6 py-4 whitespace-nowrap">Birr ${b.spent.toFixed(2)}</td>
+                <td class="px-6 py-4 whitespace-nowrap ${remainingColor}">Birr ${b.remaining.toFixed(2)}</td>
                 <td class="px-6 py-4 whitespace-nowrap">
                     <div class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700">
                         <div class="${progressColor} h-2.5 rounded-full" style="width: ${Math.min(b.percentage, 100)}%"></div>
@@ -2134,7 +2134,7 @@ export function renderBudgets(budgets, requests) {
             scales: {
                 y: {
                     beginAtZero: true,
-                    ticks: { callback: function(value) { return '$' + value; }, color: isDark ? '#e2e8f0' : '#4a5568' },
+                    ticks: { callback: function(value) { return 'Birr ' + value; }, color: isDark ? '#e2e8f0' : '#4a5568' },
                     grid: { color: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }
                 },
                 x: {
@@ -2295,3 +2295,358 @@ export function renderUsersTable(users, searchTerm = '') {
         }).join('');
     }
 }
+
+// ============================================================================
+// Stock Reconciliation Report
+// ============================================================================
+
+/**
+ * Computes reconciliation data for all inventory items against stock movements.
+ * Compares item.stock with sum of movements (IN minus OUT) and flags mismatches.
+ * @returns {Array<Object>} List of reconciled item objects
+ */
+export function computeStockReconciliation() {
+    const items = state.inventoryItemsCache || [];
+    const movements = state.stockMovementsCache || [];
+
+    // Group movements by itemId or normalized itemName
+    const movementsByItem = new Map();
+
+    movements.forEach(m => {
+        const qty = Number(m.quantity) || 0;
+        const type = String(m.type || '').toUpperCase();
+        const key = m.itemId || (m.itemName ? m.itemName.trim().toLowerCase() : null);
+        if (!key) return;
+
+        if (!movementsByItem.has(key)) {
+            movementsByItem.set(key, { totalIn: 0, totalOut: 0, count: 0 });
+        }
+        const record = movementsByItem.get(key);
+        record.count += 1;
+        if (type === 'IN') {
+            record.totalIn += qty;
+        } else if (type === 'OUT') {
+            record.totalOut += qty;
+        }
+    });
+
+    return items.map(item => {
+        const keyById = item.id;
+        const keyByName = item.name ? item.name.trim().toLowerCase() : '';
+
+        const recordById = movementsByItem.get(keyById) || { totalIn: 0, totalOut: 0, count: 0 };
+        const recordByName = (keyByName && keyByName !== keyById) ? (movementsByItem.get(keyByName) || { totalIn: 0, totalOut: 0, count: 0 }) : { totalIn: 0, totalOut: 0, count: 0 };
+
+        const totalIn = recordById.totalIn + recordByName.totalIn;
+        const totalOut = recordById.totalOut + recordByName.totalOut;
+        const movementCount = recordById.count + recordByName.count;
+
+        const systemStock = Number(item.stock || 0);
+        const computedStock = totalIn - totalOut;
+        const difference = systemStock - computedStock;
+        const isMatch = difference === 0;
+
+        return {
+            id: item.id,
+            name: item.name,
+            category: item.category || 'General',
+            price: Number(item.price || 0),
+            systemStock,
+            totalIn,
+            totalOut,
+            computedStock,
+            difference,
+            isMatch,
+            movementCount
+        };
+    }).sort((a, b) => {
+        if (a.isMatch !== b.isMatch) return a.isMatch ? 1 : -1;
+        return a.name.localeCompare(b.name);
+    });
+}
+
+let activeReconciliationFilter = 'all';
+let activeReconciliationSearch = '';
+
+export function showStockReconciliationModal() {
+    const modal = document.getElementById('stock-reconciliation-modal');
+    if (!modal) return;
+
+    activeReconciliationFilter = 'all';
+    activeReconciliationSearch = '';
+
+    modal.innerHTML = `
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-5xl transition-colors duration-300 overflow-hidden mx-4 max-h-[92vh] flex flex-col">
+            <!-- Modal Header -->
+            <div class="p-5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 rounded-lg bg-indigo-100 dark:bg-indigo-900/50 flex items-center justify-center text-indigo-600 dark:text-indigo-300">
+                        <i class="fas fa-balance-scale text-lg"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">Stock Reconciliation Report</h3>
+                        <p class="text-xs text-gray-500 dark:text-gray-400">Compares current inventory stock against the sum of stock movements (IN minus OUT).</p>
+                    </div>
+                </div>
+                <button id="close-stock-reconciliation-btn" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors p-1" aria-label="Close reconciliation modal">
+                    <i class="fas fa-times text-lg"></i>
+                </button>
+            </div>
+
+            <!-- Modal Body -->
+            <div class="p-5 overflow-y-auto flex-1 space-y-4">
+                <!-- Summary Metrics Cards -->
+                <div id="reconciliation-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
+
+                <!-- Controls: Filter Tabs & Search & Export -->
+                <div class="flex flex-col sm:flex-row justify-between items-center gap-3 pt-1">
+                    <div class="flex items-center space-x-1.5 bg-gray-100 dark:bg-gray-700 p-1 rounded-lg text-xs w-full sm:w-auto">
+                        <button type="button" class="recon-filter-btn px-3 py-1.5 rounded-md font-semibold transition-colors bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow-sm" data-filter="all">All Items (<span id="recon-count-all">0</span>)</button>
+                        <button type="button" class="recon-filter-btn px-3 py-1.5 rounded-md font-semibold transition-colors text-gray-600 dark:text-gray-300 hover:text-gray-900" data-filter="mismatch">Mismatches (<span id="recon-count-mismatch">0</span>)</button>
+                        <button type="button" class="recon-filter-btn px-3 py-1.5 rounded-md font-semibold transition-colors text-gray-600 dark:text-gray-300 hover:text-gray-900" data-filter="match">Matched (<span id="recon-count-match">0</span>)</button>
+                    </div>
+                    <div class="flex items-center gap-2 w-full sm:w-auto">
+                        <div class="relative flex-1 sm:w-56">
+                            <input type="text" id="recon-search-input" placeholder="Filter by item or category..." class="w-full pl-8 pr-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-indigo-500 focus:border-indigo-500">
+                            <i class="fas fa-search absolute left-2.5 top-2 text-gray-400 text-xs"></i>
+                        </div>
+                        <button type="button" id="recon-export-csv-btn" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center transition-colors shadow-sm whitespace-nowrap" title="Export Reconciliation Report to CSV">
+                            <i class="fas fa-file-csv mr-1.5"></i> Export CSV
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Reconciliation Results Table Container -->
+                <div id="reconciliation-table-container" class="border border-gray-200 dark:border-gray-700 rounded-lg overflow-x-auto"></div>
+            </div>
+
+            <!-- Modal Footer -->
+            <div class="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-750 flex justify-between items-center text-xs text-gray-500 dark:text-gray-400">
+                <div>
+                    <span>Computed Stock formula: <code class="font-mono bg-gray-200 dark:bg-gray-700 px-1 py-0.5 rounded text-[11px]">Total IN - Total OUT</code></span>
+                </div>
+                <button type="button" id="close-stock-reconciliation-btn-bottom" class="px-5 py-2 bg-slate-700 hover:bg-slate-800 text-white text-xs font-semibold rounded-md transition-colors shadow">Close</button>
+            </div>
+        </div>
+    `;
+
+    renderReconciliationContent();
+
+    modal.classList.remove('hidden', 'opacity-0', 'invisible');
+
+    document.getElementById('close-stock-reconciliation-btn').addEventListener('click', hideStockReconciliationModal);
+    document.getElementById('close-stock-reconciliation-btn-bottom').addEventListener('click', hideStockReconciliationModal);
+
+    const filterBtns = modal.querySelectorAll('.recon-filter-btn');
+    filterBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            filterBtns.forEach(b => {
+                b.classList.remove('bg-white', 'dark:bg-gray-600', 'text-gray-900', 'dark:text-white', 'shadow-sm');
+                b.classList.add('text-gray-600', 'dark:text-gray-300');
+            });
+            btn.classList.add('bg-white', 'dark:bg-gray-600', 'text-gray-900', 'dark:text-white', 'shadow-sm');
+            btn.classList.remove('text-gray-600', 'dark:text-gray-300');
+            activeReconciliationFilter = btn.dataset.filter;
+            renderReconciliationContent();
+        });
+    });
+
+    const searchInput = document.getElementById('recon-search-input');
+    if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+            activeReconciliationSearch = e.target.value.trim().toLowerCase();
+            renderReconciliationContent();
+        });
+    }
+
+    const exportBtn = document.getElementById('recon-export-csv-btn');
+    if (exportBtn) {
+        exportBtn.addEventListener('click', downloadStockReconciliationCsv);
+    }
+}
+
+export function hideStockReconciliationModal() {
+    const modal = document.getElementById('stock-reconciliation-modal');
+    if (!modal) return;
+    modal.classList.add('opacity-0', 'invisible');
+    setTimeout(() => modal.classList.add('hidden'), 300);
+}
+
+export function renderReconciliationContent() {
+    const allResults = computeStockReconciliation();
+    const mismatchesCount = allResults.filter(r => !r.isMatch).length;
+    const matchesCount = allResults.filter(r => r.isMatch).length;
+    const totalCount = allResults.length;
+
+    // Update filter badge counters
+    const countAllSpan = document.getElementById('recon-count-all');
+    const countMismatchSpan = document.getElementById('recon-count-mismatch');
+    const countMatchSpan = document.getElementById('recon-count-match');
+    if (countAllSpan) countAllSpan.textContent = totalCount;
+    if (countMismatchSpan) {
+        countMismatchSpan.textContent = mismatchesCount;
+        if (mismatchesCount > 0) {
+            countMismatchSpan.className = "px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-900/60 dark:text-red-300 font-bold";
+        }
+    }
+    if (countMatchSpan) countMatchSpan.textContent = matchesCount;
+
+    // Render KPIs
+    const kpisContainer = document.getElementById('reconciliation-kpis');
+    if (kpisContainer) {
+        const netDiscrepancyUnits = allResults.reduce((sum, r) => sum + Math.abs(r.difference), 0);
+        kpisContainer.innerHTML = `
+            <div class="bg-gray-50 dark:bg-gray-750 p-3 rounded-lg border border-gray-200 dark:border-gray-700">
+                <div class="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">Inventory SKUs</div>
+                <div class="text-xl font-extrabold text-gray-900 dark:text-gray-100 mt-1">${totalCount}</div>
+            </div>
+            <div class="bg-green-50/70 dark:bg-green-950/20 p-3 rounded-lg border border-green-200 dark:border-green-900/40">
+                <div class="text-[11px] font-semibold text-green-700 dark:text-green-400 uppercase">Balanced (Match)</div>
+                <div class="text-xl font-extrabold text-green-700 dark:text-green-300 mt-1">${matchesCount}</div>
+            </div>
+            <div class="${mismatchesCount > 0 ? 'bg-red-50/80 dark:bg-red-950/30 border-red-200 dark:border-red-900/40' : 'bg-gray-50 dark:bg-gray-750 border-gray-200 dark:border-gray-700'} p-3 rounded-lg border">
+                <div class="text-[11px] font-semibold ${mismatchesCount > 0 ? 'text-red-700 dark:text-red-400' : 'text-gray-500 dark:text-gray-400'} uppercase">Mismatches</div>
+                <div class="text-xl font-extrabold ${mismatchesCount > 0 ? 'text-red-600 dark:text-red-300' : 'text-gray-900 dark:text-gray-100'} mt-1">${mismatchesCount}</div>
+            </div>
+            <div class="bg-indigo-50/70 dark:bg-indigo-950/20 p-3 rounded-lg border border-indigo-200 dark:border-indigo-900/40">
+                <div class="text-[11px] font-semibold text-indigo-700 dark:text-indigo-400 uppercase">Total Unit Variance</div>
+                <div class="text-xl font-extrabold text-indigo-700 dark:text-indigo-300 mt-1">${netDiscrepancyUnits}</div>
+            </div>
+        `;
+    }
+
+    // Filter by tab
+    let displayList = allResults;
+    if (activeReconciliationFilter === 'mismatch') {
+        displayList = displayList.filter(r => !r.isMatch);
+    } else if (activeReconciliationFilter === 'match') {
+        displayList = displayList.filter(r => r.isMatch);
+    }
+
+    // Filter by search
+    if (activeReconciliationSearch) {
+        displayList = displayList.filter(r =>
+            r.name.toLowerCase().includes(activeReconciliationSearch) ||
+            r.category.toLowerCase().includes(activeReconciliationSearch)
+        );
+    }
+
+    const tableContainer = document.getElementById('reconciliation-table-container');
+    if (!tableContainer) return;
+
+    if (displayList.length === 0) {
+        tableContainer.innerHTML = `
+            <div class="text-center py-12 text-gray-500 dark:text-gray-400">
+                <i class="fas fa-check-circle text-4xl mb-3 text-green-500"></i>
+                <p class="text-sm font-semibold">${activeReconciliationFilter === 'mismatch' ? 'No stock mismatches found! All items match their movement ledger.' : 'No inventory items found matching current filters.'}</p>
+            </div>
+        `;
+        return;
+    }
+
+    const rowsHtml = displayList.map(r => {
+        const diffDisplay = r.difference > 0 ? `+${r.difference}` : `${r.difference}`;
+        const diffColor = r.isMatch
+            ? 'text-gray-500 dark:text-gray-400 font-medium'
+            : (r.difference > 0 ? 'text-amber-600 dark:text-amber-400 font-bold' : 'text-red-600 dark:text-red-400 font-bold');
+
+        const badgeHtml = r.isMatch
+            ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-800 dark:bg-green-900/60 dark:text-green-200 border border-green-200 dark:border-green-800"><i class="fas fa-check mr-1 text-[10px]"></i> Balanced</span>`
+            : `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-800 dark:bg-red-900/60 dark:text-red-200 border border-red-200 dark:border-red-800"><i class="fas fa-exclamation-triangle mr-1 text-[10px]"></i> Mismatch (${diffDisplay})</span>`;
+
+        const rowBg = !r.isMatch ? 'bg-red-50/40 dark:bg-red-950/10' : '';
+
+        return `
+            <tr class="border-b border-gray-150 dark:border-gray-700/60 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors ${rowBg} text-xs">
+                <td class="px-4 py-3 font-semibold text-gray-900 dark:text-gray-100">
+                    <div>${r.name}</div>
+                    <span class="text-[10px] text-gray-500 dark:text-gray-400 font-normal">Category: ${r.category}</span>
+                </td>
+                <td class="px-4 py-3 text-center font-bold text-gray-800 dark:text-gray-200 bg-gray-50/50 dark:bg-gray-800/50">
+                    ${r.systemStock}
+                </td>
+                <td class="px-4 py-3 text-center text-emerald-600 dark:text-emerald-400 font-semibold">
+                    +${r.totalIn}
+                </td>
+                <td class="px-4 py-3 text-center text-rose-600 dark:text-rose-400 font-semibold">
+                    -${r.totalOut}
+                </td>
+                <td class="px-4 py-3 text-center font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50/30 dark:bg-indigo-950/20">
+                    ${r.computedStock}
+                </td>
+                <td class="px-4 py-3 text-center ${diffColor}">
+                    ${diffDisplay}
+                </td>
+                <td class="px-4 py-3 text-center whitespace-nowrap">
+                    ${badgeHtml}
+                </td>
+            </tr>
+        `;
+    }).join('');
+
+    tableContainer.innerHTML = `
+        <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-xs">
+            <thead class="bg-gray-50 dark:bg-gray-750 text-gray-600 dark:text-gray-300">
+                <tr>
+                    <th class="px-4 py-2.5 text-left font-semibold uppercase tracking-wider">Item & Category</th>
+                    <th class="px-4 py-2.5 text-center font-semibold uppercase tracking-wider bg-gray-100/60 dark:bg-gray-700/40" title="Recorded stock value on inventory document">System Stock</th>
+                    <th class="px-4 py-2.5 text-center font-semibold uppercase tracking-wider" title="Total received from POs / Vendor Delivery">Total IN</th>
+                    <th class="px-4 py-2.5 text-center font-semibold uppercase tracking-wider" title="Total issued to hotel departments">Total OUT</th>
+                    <th class="px-4 py-2.5 text-center font-semibold uppercase tracking-wider bg-indigo-50/60 dark:bg-indigo-950/30" title="Expected stock = Total IN minus Total OUT">Computed Stock</th>
+                    <th class="px-4 py-2.5 text-center font-semibold uppercase tracking-wider" title="Variance = System Stock minus Computed Stock">Variance</th>
+                    <th class="px-4 py-2.5 text-center font-semibold uppercase tracking-wider">Audit Status</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-150 dark:divide-gray-700/60 bg-white dark:bg-gray-800">
+                ${rowsHtml}
+            </tbody>
+        </table>
+    `;
+}
+
+export function downloadStockReconciliationCsv() {
+    try {
+        const results = computeStockReconciliation();
+        if (results.length === 0) {
+            showNotification("No inventory items found to export.", true);
+            return;
+        }
+
+        const headers = ['Item Name', 'Category', 'System Stock', 'Total IN (Received)', 'Total OUT (Issued)', 'Computed Stock (IN-OUT)', 'Variance', 'Status'];
+
+        const escCsv = (val) => {
+            const str = String(val ?? '');
+            if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+                return `"${str.replace(/"/g, '""')}"`;
+            }
+            return str;
+        };
+
+        const rows = results.map(r => [
+            r.name,
+            r.category,
+            r.systemStock,
+            r.totalIn,
+            r.totalOut,
+            r.computedStock,
+            r.difference > 0 ? `+${r.difference}` : r.difference,
+            r.isMatch ? 'Balanced' : 'Mismatch'
+        ].map(escCsv).join(','));
+
+        const csvContent = [headers.join(','), ...rows].join('\n');
+        const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `Stock_Reconciliation_Report_${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        showNotification("Stock reconciliation report downloaded successfully!");
+    } catch (err) {
+        console.error('Reconciliation export failed:', err);
+        showNotification("Failed to export reconciliation report.", true);
+    }
+}
+

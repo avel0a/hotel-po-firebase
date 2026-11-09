@@ -218,11 +218,15 @@ public/
 
 Enforced via `firestore.rules`:
 * **Anonymous Access Denied:** All queries require active authentication.
-* **Storekeeper Access Lock:** Writes to `/inventory/{itemId}` and `/stock_movements/{movementId}` strictly require:
-  ```javascript
-  getUserData().role in ['Storekeeper', 'Store Keeper', 'System Administrator']
-  ```
-* **Separation of Duties:** Purchasing and general department users are prevented at the database level from manually inflating or adjusting stock numbers.
+* **Role-Based Users Collection:** Authenticated users can read profiles and self-register on first login, but cannot alter `role`, `department`, or `status`. Only `System Administrator` can create users or alter staff roles and departments.
+* **Granular Requests Permissions:**
+  - Creation restricted to `status == 'Pending'` and `createdBy == auth.uid`.
+  - Approval/Rejection restricted to `General Manager` and `System Administrator`.
+  - Vendor ordering (`Ordered`) restricted to `Purchasing` and `System Administrator`.
+  - Goods issuance/receipt (`Issued`, `Partially Issued`, `Received`, `Partially Received`) restricted to `Storekeeper` and `System Administrator`.
+* **Storekeeper Inventory Lock:** Writes to `/inventory/{itemId}` and `/stock_movements/{movementId}` strictly require `Storekeeper` or `System Administrator`.
+* **Immutable Audit Trail:** `/stock_movements/{movementId}` update and delete operations are permanently rejected (`allow update, delete: if false;`).
+* **Budgets, Departments, Settings:** Modifiable only by `General Manager` and `System Administrator`.
 
 ---
 
@@ -241,8 +245,9 @@ firebase deploy --only "hosting,firestore:rules"
    Navigate to **User Management**, edit the target staff member, and set Role to **`Storekeeper`** (Department: `Store`).
 3. **Restocking Low Items:**
    Storekeepers can click **"Restock Low Items"** in the Inventory tab to automatically generate a pre-filled Purchase Order for all items below their minimum thresholds.
-4. **Physical Stock Audits:**
-   Click **"Stock Movement Log"** in the Inventory tab to inspect the full timeline of goods entering and leaving the warehouse.
+4. **Physical Stock Audits & Reconciliation:**
+   - Click **"Stock Movement Log"** in the Inventory tab to inspect the full timeline of goods entering and leaving the warehouse.
+   - Click **"Stock Reconciliation"** (in Inventory or Reports) to compare recorded physical stock against the mathematical sum of all historical movements (`Total IN - Total OUT`), instantly highlighting discrepancies and offering CSV export.
 
 ---
 

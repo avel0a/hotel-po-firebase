@@ -19,6 +19,7 @@ import {
     showOrderPOModal, hideOrderPOModal,
     showReceiveGoodsModal, hideReceiveGoodsModal,
     showStockLogModal, hideStockLogModal,
+    showStockReconciliationModal, hideStockReconciliationModal,
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix
 } from './ui.js';
 import {
@@ -116,6 +117,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // Stock log modal
     const stockLogBtn = document.getElementById('view-stock-log-btn');
     if (stockLogBtn) stockLogBtn.addEventListener('click', showStockLogModal);
+
+    // Stock reconciliation modal
+    const stockReconBtn = document.getElementById('view-stock-reconciliation-btn');
+    if (stockReconBtn) stockReconBtn.addEventListener('click', showStockReconciliationModal);
+
+    const reportStockReconBtn = document.getElementById('report-stock-reconciliation-btn');
+    if (reportStockReconBtn) reportStockReconBtn.addEventListener('click', showStockReconciliationModal);
 
     // CSV download
     const csvBtn = document.getElementById('download-csv-btn');

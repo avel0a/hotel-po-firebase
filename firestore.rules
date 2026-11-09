@@ -6,43 +6,104 @@ service cloud.firestore {
     function isAuthenticated() {
       return request.auth != null;
     }
-    
-    // Helper function to read the requesting user's profile
-    function getUserData() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-    }
-    
-    // Storekeeper or Administrator check
-    function isStorekeeperOrAdmin() {
-      return isAuthenticated() && (
-        getUserData().role in ['Storekeeper', 'Store Keeper', 'System Administrator']
-      );
+
+    // Helper function to read requesting user's profile
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
     }
 
-    // Inventory collection: Only Storekeeper and Admin can write stock quantities
+    function isAdmin() {
+      return isAuthenticated() && getUserRole() == 'System Administrator';
+    }
+
+    function isGM() {
+      return isAuthenticated() && getUserRole() == 'General Manager';
+    }
+
+    function isAdminOrGM() {
+      return isAuthenticated() && (getUserRole() in ['System Administrator', 'General Manager']);
+    }
+
+    function isStorekeeper() {
+      return isAuthenticated() && (getUserRole() in ['Storekeeper', 'Store Keeper']);
+    }
+
+    function isPurchasing() {
+      return isAuthenticated() && getUserRole() == 'Purchasing';
+    }
+
+    function isStorekeeperOrAdmin() {
+      return isStorekeeper() || isAdmin();
+    }
+
+    // users: read for any signed-in user; only System Administrator can change role or department;
+    // a user may edit only their own non-privileged fields.
+    // Supports self-registration on first login (auth.js) and admin creation (actions.js handleCreateUser).
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (
+        isAdmin() ||
+        (userId == request.auth.uid && (!('role' in request.resource.data) || request.resource.data.role == 'User'))
+      );
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        (userId == request.auth.uid &&
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'department', 'status']))
+      );
+      allow delete: if isAdmin();
+    }
+
+    // requests: create only as Pending with createdBy == own uid.
+    // Approve/Reject only General Manager or Admin.
+    // Place order (Ordered) only Purchasing or Admin.
+    // Issue/receive (Issued, Partially Issued, Received, Partially Received) only Storekeeper or Admin.
+    match /requests/{requestId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+        request.resource.data.status == 'Pending' &&
+        request.resource.data.createdBy == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        // GM: approve or reject
+        (isGM() && request.resource.data.status in ['Approved', 'Rejected']) ||
+        // Purchasing: place order
+        (isPurchasing() && request.resource.data.status == 'Ordered') ||
+        // Storekeeper: issue requisition or receive goods
+        (isStorekeeper() && (
+          request.resource.data.status in ['Issued', 'Partially Issued', 'Received', 'Partially Received'] ||
+          request.resource.data.received == true
+        ))
+      );
+      allow delete: if isAdmin();
+    }
+
+    // inventory: Storekeeper or Admin only
     match /inventory/{itemId} {
       allow read: if isAuthenticated();
       allow write: if isStorekeeperOrAdmin();
     }
 
-    // Stock movements audit log: Only Storekeeper and Admin can create or modify movement records
+    // stock_movements: Storekeeper or Admin only; must never be updated or deleted (immutable audit ledger)
     match /stock_movements/{movementId} {
       allow read: if isAuthenticated();
       allow create: if isStorekeeperOrAdmin();
-      allow update, delete: if isStorekeeperOrAdmin();
+      allow update, delete: if false;
     }
 
-    // Requests (Requisitions & Purchase Orders)
-    match /requests/{requestId} {
+    // budgets, departments, settings: read for signed-in users; write for Admin and General Manager only
+    match /budgets/{budgetId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if isStorekeeperOrAdmin() || getUserData().role in ['General Manager'];
+      allow write: if isAdminOrGM();
     }
 
-    // All other collections (users, budgets, departments, settings)
-    match /{document=**} {
-      allow read, write: if isAuthenticated();
+    match /departments/{deptId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdminOrGM();
+    }
+
+    match /settings/{settingId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdminOrGM();
     }
   }
 }

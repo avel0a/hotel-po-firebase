@@ -324,38 +324,97 @@ service cloud.firestore {
     function isAuthenticated() {
       return request.auth != null;
     }
-    
-    function getUserData() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-    }
-    
-    function isStorekeeperOrAdmin() {
-      return isAuthenticated() && (
-        getUserData().role in ['Storekeeper', 'Store Keeper', 'System Administrator']
-      );
+
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
     }
 
-    // Inventory: Only Storekeeper and Admin can write stock quantities
+    function isAdmin() {
+      return isAuthenticated() && getUserRole() == 'System Administrator';
+    }
+
+    function isGM() {
+      return isAuthenticated() && getUserRole() == 'General Manager';
+    }
+
+    function isAdminOrGM() {
+      return isAuthenticated() && (getUserRole() in ['System Administrator', 'General Manager']);
+    }
+
+    function isStorekeeper() {
+      return isAuthenticated() && (getUserRole() in ['Storekeeper', 'Store Keeper']);
+    }
+
+    function isPurchasing() {
+      return isAuthenticated() && getUserRole() == 'Purchasing';
+    }
+
+    function isStorekeeperOrAdmin() {
+      return isStorekeeper() || isAdmin();
+    }
+
+    // users: read for signed-in; only Admin changes role/department; users can edit non-privileged fields
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (
+        isAdmin() ||
+        (userId == request.auth.uid && (!('role' in request.resource.data) || request.resource.data.role == 'User'))
+      );
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        (userId == request.auth.uid &&
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'department', 'status']))
+      );
+      allow delete: if isAdmin();
+    }
+
+    // requests: create only as Pending with createdBy == own uid.
+    // Approve/Reject only GM or Admin. Place order (Ordered) only Purchasing or Admin.
+    // Issue/receive only Storekeeper or Admin.
+    match /requests/{requestId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+        request.resource.data.status == 'Pending' &&
+        request.resource.data.createdBy == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        (isGM() && request.resource.data.status in ['Approved', 'Rejected']) ||
+        (isPurchasing() && request.resource.data.status == 'Ordered') ||
+        (isStorekeeper() && (
+          request.resource.data.status in ['Issued', 'Partially Issued', 'Received', 'Partially Received'] ||
+          request.resource.data.received == true
+        ))
+      );
+      allow delete: if isAdmin();
+    }
+
+    // inventory: Storekeeper or Admin only
     match /inventory/{itemId} {
       allow read: if isAuthenticated();
       allow write: if isStorekeeperOrAdmin();
     }
 
-    // Stock movements audit log: Only Storekeeper and Admin can write
+    // stock_movements: Storekeeper or Admin only; immutable ledger (never update or delete)
     match /stock_movements/{movementId} {
       allow read: if isAuthenticated();
-      allow create, update, delete: if isStorekeeperOrAdmin();
+      allow create: if isStorekeeperOrAdmin();
+      allow update, delete: if false;
     }
 
-    // Requests: Authenticated access; deletions restricted to GM / Admin
-    match /requests/{requestId} {
-      allow read, create, update: if isAuthenticated();
-      allow delete: if isStorekeeperOrAdmin() || getUserData().role in ['General Manager'];
+    // budgets, departments, settings: read for signed-in users; write for Admin and GM only
+    match /budgets/{budgetId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdminOrGM();
     }
 
-    // All other collections
-    match /{document=**} {
-      allow read, write: if isAuthenticated();
+    match /departments/{deptId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdminOrGM();
+    }
+
+    match /settings/{settingId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdminOrGM();
     }
   }
 }

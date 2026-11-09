@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "purchase-70a3f",
     "public": "public",
     "ignore": [
       "firebase.json",
@@ -19,5 +20,17 @@
   "firestore": {
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
+  },
+  "emulators": {
+    "firestore": {
+      "port": 8088
+    },
+    "hosting": {
+      "port": 5000
+    },
+    "ui": {
+      "enabled": true,
+      "port": 4000
+    }
   }
 }

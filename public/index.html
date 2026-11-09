@@ -325,7 +325,7 @@
                                     <button type="button" id="add-item-btn" class="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"><i class="fas fa-plus mr-2"></i> Add Item</button>
                                     <div class="text-right">
                                         <span class="text-lg font-semibold text-gray-700 dark:text-gray-200">Total Estimated Cost:</span>
-                                        <span id="total-cost-display" class="text-xl font-bold text-hotel-primary ml-2">$0.00</span>
+                                        <span id="total-cost-display" class="text-xl font-bold text-hotel-primary ml-2">Birr 0.00</span>
                                     </div>
                                 </div>
                             </div>
@@ -409,6 +409,9 @@
                                 <button id="view-stock-log-btn" class="flex-1 md:flex-initial px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-800 transition-colors flex items-center justify-center text-sm font-medium shadow-sm" title="View historical stock in and stock out movements">
                                     <i class="fas fa-history mr-2"></i> Stock Movement Log
                                 </button>
+                                <button id="view-stock-reconciliation-btn" class="flex-1 md:flex-initial px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center justify-center text-sm font-medium shadow-sm" title="Reconcile inventory stock with IN minus OUT movements">
+                                    <i class="fas fa-balance-scale mr-2"></i> Stock Reconciliation
+                                </button>
                                 <button id="show-receive-modal-btn" class="flex-1 md:flex-initial px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 requires-role transition-colors flex items-center justify-center text-sm font-medium shadow-sm" data-role="System Administrator, Store Keeper, Purchasing" title="Receive incoming vendor shipment into hotel store">
                                     <i class="fas fa-arrow-circle-down mr-2"></i> Receive / Fill Store
                                 </button>
@@ -452,6 +455,9 @@
                                 <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Export filtered purchase history and department totals.</p>
                             </div>
                             <div class="flex space-x-2">
+                                <button id="report-stock-reconciliation-btn" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center text-sm font-medium shadow-sm" title="Reconcile inventory stock with movements log">
+                                    <i class="fas fa-balance-scale mr-2"></i> Stock Reconciliation
+                                </button>
                                 <button id="download-csv-btn" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors flex items-center text-sm font-medium shadow-sm" title="Export as Excel / CSV file">
                                     <i class="fas fa-file-excel mr-2"></i> Download Excel/CSV
                                 </button>
@@ -491,7 +497,7 @@
                             <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
                                 <div><label class="block text-sm font-medium text-gray-700 mb-1">Department</label><select id="budget-department" class="w-full p-2 border border-gray-300 rounded-md"><option>Housekeeping</option><option>Kitchen</option><option>Maintenance</option><option>Front Desk</option><option>Management</option><option>Information Technology</option><option>Food&amp;Beverage</option><option>SPA</option><option>Security</option><option>Finance</option><option>Other</option></select></div>
                                 <div><label class="block text-sm font-medium text-gray-700 mb-1">Month</label><input type="month" id="budget-month" class="w-full p-2 border border-gray-300 rounded-md"></div>
-                                <div><label class="block text-sm font-medium text-gray-700 mb-1">Budget Amount ($)</label><input type="number" step="100" id="budget-amount" class="w-full p-2 border border-gray-300 rounded-md"></div>
+                                <div><label class="block text-sm font-medium text-gray-700 mb-1">Budget Amount (Birr)</label><input type="number" step="100" id="budget-amount" class="w-full p-2 border border-gray-300 rounded-md"></div>
                                 <button id="set-budget-btn" class="px-4 py-2 bg-hotel-primary text-white rounded-md hover:bg-hotel-secondary transition-colors">Set Budget</button>
                             </div>
                         </div>
@@ -675,6 +681,7 @@
     <div id="order-po-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>
     <div id="receive-goods-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>
     <div id="stock-log-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>
+    <div id="stock-reconciliation-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>
     <div id="user-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>
     <div id="confirm-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>
     <div id="request-details-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>

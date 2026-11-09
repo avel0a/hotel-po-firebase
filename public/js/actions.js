@@ -1104,7 +1104,7 @@ export async function handleSetBudget() {
             year: monthInput.split('-')[0],
             month_num: monthInput.split('-')[1]
         });
-        showNotification(`Budget for ${department} for ${monthInput} set to $${amount.toFixed(2)}.`, false);
+        showNotification(`Budget for ${department} for ${monthInput} set to Birr ${amount.toFixed(2)}.`, false);
     } catch (error) {
         console.error("Error setting budget:", error);
         showNotification("Failed to set budget.", true);
@@ -1182,7 +1182,7 @@ export async function downloadReportPdf() {
             const body = state.currentFilteredRequests.map(req => {
                 const date = req.createdAt?.toDate().toLocaleDateString() || 'N/A';
                 const requestedBy = state.allUsersCache.find(u => u.id === req.createdBy)?.email || 'N/A';
-                return [date, req.department, `$${(req.totalCost || 0).toFixed(2)}`, requestedBy, req.status];
+                return [date, req.department, `Birr ${(req.totalCost || 0).toFixed(2)}`, requestedBy, req.status];
             });
             pdf.autoTable({
                 head, body,
@@ -1240,7 +1240,7 @@ export function downloadReportCsv() {
             return [
                 date,
                 req.department,
-                `$${(req.totalCost || 0).toFixed(2)}`,
+                `Birr ${(req.totalCost || 0).toFixed(2)}`,
                 requestedBy,
                 req.status,
                 itemsSummary,
@@ -1317,7 +1317,7 @@ export function handleQuickOrderLowStock() {
         if (nameInput) nameInput.value = item.name;
         if (quantityInput) quantityInput.value = qty;
         if (priceInput) priceInput.value = item.price || 0;
-        if (subtotalSpan) subtotalSpan.textContent = `$${((item.price || 0) * qty).toFixed(2)}`;
+        if (subtotalSpan) subtotalSpan.textContent = `Birr ${((item.price || 0) * qty).toFixed(2)}`;
     });
 
     updateTotalCost();

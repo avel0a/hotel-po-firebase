@@ -82,3 +82,19 @@ export const DEFAULT_ROLE_PERMISSIONS = {
         'create_request'
     ]
 };
+
+/**
+ * Determines whether a given request is a Purchase Order (Flow B) or Requisition (Flow A).
+ * @param {Object} req Request document data
+ * @returns {boolean} True if purchase request / PO
+ */
+export function isPurchaseRequest(req) {
+    if (!req) return false;
+    return req.requestType === REQUEST_TYPES.PURCHASE ||
+           req.requestType === 'purchase' ||
+           req.requestType === 'Purchase Order' ||
+           req.isRestockOrder === true ||
+           req.department === 'Store' ||
+           req.department === 'Purchasing';
+}
+
