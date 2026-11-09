@@ -20,7 +20,7 @@ import {
     handleEditUser, handleSaveUserEdit, handleResetUserPassword, handleDeleteUser,
     handleRequestFormSubmit, updateRequestStatus, markRequestAsReceived,
     handleItemFormSubmit, deleteInventoryItem,
-    handleSetBudget, downloadReportPdf
+    handleSetBudget, downloadReportPdf, downloadReportCsv, handleQuickOrderLowStock
 } from './actions.js';
 import { initializeFirebase } from './auth.js';
 
@@ -83,6 +83,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Report Controls ---
     document.getElementById('apply-report-filters-btn').addEventListener('click', applyReportFilters);
     document.getElementById('download-pdf-btn').addEventListener('click', downloadReportPdf);
+
+    // CSV download
+    const csvBtn = document.getElementById('download-csv-btn');
+    if (csvBtn) csvBtn.addEventListener('click', downloadReportCsv);
+
+    // Low-stock quick order
+    const quickOrderBtn = document.getElementById('quick-order-low-stock-btn');
+    if (quickOrderBtn) quickOrderBtn.addEventListener('click', handleQuickOrderLowStock);
 
     // --- Theme Toggle ---
     document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
@@ -216,11 +224,25 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Approve / Reject
+        // Approve / Reject (with approval notes)
         const approveBtn = e.target.closest('.approve-btn');
-        if (approveBtn) { updateRequestStatus(approveBtn.dataset.id, 'Approved'); return; }
+        if (approveBtn) {
+            const reqId = approveBtn.dataset.id;
+            const card = approveBtn.closest('.approval-card');
+            const notesInput = card ? card.querySelector(`.approval-notes-input[data-id="${reqId}"]`) : null;
+            const notes = notesInput ? notesInput.value : '';
+            updateRequestStatus(reqId, 'Approved', notes);
+            return;
+        }
         const rejectBtn = e.target.closest('.reject-btn');
-        if (rejectBtn) { updateRequestStatus(rejectBtn.dataset.id, 'Rejected'); return; }
+        if (rejectBtn) {
+            const reqId = rejectBtn.dataset.id;
+            const card = rejectBtn.closest('.approval-card');
+            const notesInput = card ? card.querySelector(`.approval-notes-input[data-id="${reqId}"]`) : null;
+            const notes = notesInput ? notesInput.value : '';
+            updateRequestStatus(reqId, 'Rejected', notes);
+            return;
+        }
 
         // Show add inventory item modal
         if (e.target.closest('#show-add-item-modal-btn')) { showItemModal(); return; }

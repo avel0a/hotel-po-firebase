@@ -282,6 +282,7 @@ export function showRequestDetailsModal(req) {
                         ${req.items.map(i => `<li>${i.name} - ${i.quantity} ${i.unit || ''} (@ $${(i.price || 0).toFixed(2)} each)</li>`).join('')}
                     </ul>
                 </div>
+                ${req.approvalNotes ? `<div><span class="font-semibold">Approval Notes:</span> <span class="text-gray-700 dark:text-gray-300">${req.approvalNotes}</span></div>` : ''}
                 ${req.received ? `<div><span class="font-semibold text-green-600"><i class="fas fa-check-circle mr-1"></i>Received on: ${req.receivedAt?.toDate().toLocaleDateString() || 'N/A'}</span></div>` : ''}
                 ${req.status === 'Approved' && req.processedAt ? `<div><span class="font-semibold text-green-600">Approved on: ${req.processedAt?.toDate().toLocaleDateString() || 'N/A'}</span></div>` : ''}
                 ${req.status === 'Rejected' && req.processedAt ? `<div><span class="font-semibold text-red-600">Rejected on: ${req.processedAt?.toDate().toLocaleDateString() || 'N/A'}</span></div>` : ''}
@@ -588,6 +589,8 @@ export function renderApprovals(requests) {
                                 <p class="text-sm text-gray-700 dark:text-gray-300">${req.notes || 'None'}</p>
                             </div>
                             <div>
+                                <h4 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Approval Notes</h4>
+                                <textarea data-id="${req.id}" class="approval-notes-input w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 resize-none mb-2" rows="2" placeholder="Optional notes (e.g. reason for approval/rejection)..."></textarea>
                                 <h4 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Actions</h4>
                                 <div class="flex space-x-2 mt-2">
                                     <button data-id="${req.id}" class="approve-btn flex-1 px-3 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 text-sm transition-colors">Approve</button>

@@ -13,12 +13,12 @@ A full-featured **Inventory & Purchase Request Management** web application buil
 
 ### Core Modules
 - **📊 Dashboard** — Real-time stats, charts (requests over time, status breakdown), quick actions, and recent requests feed
-- **📝 Purchase Requests** — Create requests with auto-priced items from inventory, department routing, priority levels, and required-by dates
-- **✅ Approval Workflow** — General Managers review and approve/reject pending requests with full item details
-- **📦 Inventory Management** — Track stock levels, categories, pricing, min-level alerts, sortable/searchable table
+- **📝 Purchase Requests** — Automatic user and department recognition; optional override for Admins/GM; auto-priced items from inventory; priority levels and required-by dates
+- **✅ Approval Workflow** — General Managers review and approve/reject pending requests with optional approval/rejection notes and full item details
+- **📦 Inventory Management** — Track stock levels, categories, pricing, min-level alerts, sortable/searchable table; "Restock Low Items" 1-click quick-order button
 - **💰 Department Budgeting** — Set monthly budgets per department, track spending vs. allocation with visual progress bars and charts
-- **📈 Reports & PDF Export** — Filter by date, status, user; generate professional PDF reports with jsPDF
-- **👤 User Management** — Admins create users with role & department assignments
+- **📈 Reports & PDF/Excel Export** — Filter by date, status, user; generate professional PDF reports or download Excel/CSV data files
+- **👤 User Management** — Admins create users seamlessly without signing out; edit roles, departments, and account status (Active/Suspended); send password reset emails; delete accounts; search users in real time
 
 ### Technical Features
 - 🔐 Firebase Authentication (email/password)
@@ -130,8 +130,8 @@ firebase deploy --only firestore:rules
 
 | Collection    | Document Fields                                                                                        |
 |---------------|--------------------------------------------------------------------------------------------------------|
-| `users`       | `email`, `role`, `department`, `createdAt`                                                             |
-| `requests`    | `department`, `priority`, `requiredBy`, `notes`, `items[]`, `totalCost`, `status`, `createdAt`, `createdBy`, `createdByEmail`, `processedAt`, `received`, `receivedAt` |
+| `users`       | `email`, `role`, `department`, `status` ('Active' / 'Suspended'), `createdAt`                           |
+| `requests`    | `department`, `priority`, `requiredBy`, `notes`, `items[]`, `totalCost`, `status`, `approvalNotes`, `createdAt`, `createdBy`, `createdByEmail`, `processedAt`, `received`, `receivedAt` |
 | `inventory`   | `name`, `category`, `stock`, `min`, `price`                                                            |
 | `budgets`     | `department`, `month` (YYYY-MM), `amount`, `year`, `month_num`                                        |
 

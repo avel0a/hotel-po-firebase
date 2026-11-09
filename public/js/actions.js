@@ -277,16 +277,20 @@ export async function handleRequestFormSubmit(e) {
 }
 
 /**
- * Updates request status (Approve / Reject).
+ * Updates request status (Approve / Reject) with optional approval notes.
  */
-export async function updateRequestStatus(id, newStatus) {
+export async function updateRequestStatus(id, newStatus, approvalNotes = '') {
     if (state.userRole !== 'General Manager' && state.userRole !== 'System Administrator') {
         showNotification("You don't have permission to do this.", true);
         return;
     }
     showLoadingOverlay();
     try {
-        await setDoc(doc(state.db, 'requests', id), { status: newStatus, processedAt: serverTimestamp() }, { merge: true });
+        const updateData = { status: newStatus, processedAt: serverTimestamp() };
+        if (approvalNotes && approvalNotes.trim()) {
+            updateData.approvalNotes = approvalNotes.trim();
+        }
+        await setDoc(doc(state.db, 'requests', id), updateData, { merge: true });
         showNotification(`Request has been ${newStatus.toLowerCase()}.`);
     } catch (error) {
         console.error(`Error updating request to ${newStatus}:`, error);
@@ -321,7 +325,7 @@ export async function markRequestAsReceived(requestId) {
 
         await setDoc(requestDocRef, { received: true, receivedAt: serverTimestamp() }, { merge: true });
 
-        // Decrease stock for each item
+        // RESTOCK: Increase inventory stock for each received item
         if (requestData.items && requestData.items.length > 0) {
             for (const item of requestData.items) {
                 const itemName = item.name;
@@ -332,15 +336,12 @@ export async function markRequestAsReceived(requestId) {
                 if (!inventorySnapshot.empty) {
                     const inventoryDoc = inventorySnapshot.docs[0];
                     const currentStock = inventoryDoc.data().stock;
-                    const newStock = currentStock - quantityReceived;
-                    if (newStock < 0) {
-                        showNotification(`Warning: Stock for ${itemName} would go below zero after this receipt.`, true);
-                    }
+                    const newStock = currentStock + quantityReceived;
                     await setDoc(doc(state.db, 'inventory', inventoryDoc.id), { stock: newStock }, { merge: true });
-                    console.log(`Decreased stock for ${itemName} by ${quantityReceived}. New stock: ${newStock}`);
+                    console.log(`Restocked ${itemName}: +${quantityReceived} units. New stock: ${newStock}`);
                 } else {
-                    console.warn(`Inventory item "${itemName}" not found for stock decrease.`);
-                    showNotification(`Warning: Inventory item "${itemName}" not found for stock update.`, true);
+                    console.warn(`Inventory item "${itemName}" not found for restocking.`);
+                    showNotification(`Note: "${itemName}" is not in inventory. Stock was not updated.`, true);
                 }
             }
         }
@@ -553,4 +554,117 @@ export async function downloadReportPdf() {
         console.error('PDF generation or save failed:', err);
         showNotification("PDF could not be downloaded. See console for details.", true);
     }
+}
+
+// ============================================================================
+// CSV Report Download
+// ============================================================================
+
+/**
+ * Generates and downloads a CSV report from the currently filtered requests.
+ */
+export function downloadReportCsv() {
+    try {
+        if (!Array.isArray(state.currentFilteredRequests) || state.currentFilteredRequests.length === 0) {
+            showNotification("No requests found with current filters. Nothing to export.", true);
+            return;
+        }
+
+        const headers = ['Date', 'Department', 'Total Cost', 'Requested By', 'Status', 'Items', 'Priority', 'Notes', 'Approval Notes'];
+
+        const escCsv = (val) => {
+            const str = String(val ?? '');
+            if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+                return `"${str.replace(/"/g, '""')}"`;
+            }
+            return str;
+        };
+
+        const rows = state.currentFilteredRequests.map(req => {
+            const date = req.createdAt?.toDate().toLocaleDateString() || 'N/A';
+            const requestedBy = state.allUsersCache.find(u => u.id === req.createdBy)?.email || 'N/A';
+            const itemsSummary = req.items.map(i => `${i.name} x${i.quantity}`).join('; ');
+            return [
+                date,
+                req.department,
+                `$${(req.totalCost || 0).toFixed(2)}`,
+                requestedBy,
+                req.status,
+                itemsSummary,
+                req.priority || 'N/A',
+                req.notes || '',
+                req.approvalNotes || ''
+            ].map(escCsv).join(',');
+        });
+
+        const csvContent = [headers.join(','), ...rows].join('\n');
+        const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `Hotel_PO_Report_${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        showNotification("CSV report downloaded successfully!");
+    } catch (err) {
+        console.error('CSV generation failed:', err);
+        showNotification("CSV could not be downloaded. See console for details.", true);
+    }
+}
+
+// ============================================================================
+// Low-Stock Quick Order
+// ============================================================================
+
+/**
+ * Finds all inventory items below minimum stock level and auto-populates
+ * a new purchase request with those items and quantities to restore stock.
+ */
+export function handleQuickOrderLowStock() {
+    const lowStockItems = state.inventoryItemsCache.filter(item => item.stock < item.min);
+
+    if (lowStockItems.length === 0) {
+        showNotification("No low-stock items to reorder. All inventory levels are healthy!", false);
+        return;
+    }
+
+    // Navigate to the new-request section
+    showSection('new-request');
+
+    // Clear existing item rows
+    const container = document.getElementById('items-container');
+    if (!container) return;
+    container.innerHTML = '';
+
+    // Add a row for each low-stock item and pre-fill
+    lowStockItems.forEach(item => {
+        addRequestItemRow();
+        const rows = container.querySelectorAll('.item-row');
+        const lastRow = rows[rows.length - 1];
+
+        const nameInput = lastRow.querySelector('.item-name');
+        const quantityInput = lastRow.querySelector('.item-quantity');
+        const priceInput = lastRow.querySelector('.item-price');
+        const subtotalSpan = lastRow.querySelector('.item-subtotal');
+
+        const deficit = item.min - item.stock;
+        const qty = Math.max(deficit, 1);
+
+        if (nameInput) nameInput.value = item.name;
+        if (quantityInput) quantityInput.value = qty;
+        if (priceInput) priceInput.value = item.price || 0;
+        if (subtotalSpan) subtotalSpan.textContent = `$${((item.price || 0) * qty).toFixed(2)}`;
+    });
+
+    updateTotalCost();
+
+    // Set notes to indicate this was auto-generated
+    const notesField = document.getElementById('req-notes');
+    if (notesField) {
+        notesField.value = `Auto-generated restock order for ${lowStockItems.length} low-stock item(s).`;
+    }
+
+    showNotification(`${lowStockItems.length} low-stock item(s) added to new request. Review and submit.`, false);
 }

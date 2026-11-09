@@ -88,15 +88,15 @@ The app uses **vanilla JavaScript ES Modules** loaded directly by the browser. T
 
 | File | Lines | What it does | When to modify |
 |------|-------|-------------|----------------|
-| `public/index.html` | ~380 | HTML structure, CDN links, Tailwind config | Adding new sections/pages |
+| `public/index.html` | ~515 | HTML structure, CDN links, Tailwind config | Adding new sections/pages |
 | `public/css/styles.css` | ~660 | Custom CSS (glassmorphism, dark mode, forms) | Visual changes |
 | `public/js/config.js` | ~30 | Firebase config, department/role/unit lists | Config changes, adding departments |
 | `public/js/state.js` | ~45 | Single mutable state object (caches, charts, user) | Adding new global state |
-| `public/js/firebase.js` | ~35 | Firebase SDK init, re-exports all SDK functions | Upgrading Firebase SDK version |
-| `public/js/ui.js` | ~550 | ALL rendering: dashboard, tables, charts, modals, notifications, theme, navigation | Changing how data is displayed |
-| `public/js/actions.js` | ~350 | ALL data mutations: form handlers, CRUD, approve/reject, PDF export | Changing business logic |
-| `public/js/auth.js` | ~130 | Auth state listener, user profile loading, Firestore `onSnapshot` subscriptions | Changing auth flow or data subscriptions |
-| `public/js/app.js` | ~190 | `DOMContentLoaded` handler, all event listener wiring | Adding new buttons/interactions |
+| `public/js/firebase.js` | ~40 | Firebase SDK init, re-exports all SDK functions | Upgrading Firebase SDK version |
+| `public/js/ui.js` | ~1060 | ALL rendering: dashboard, tables, charts, modals, notifications, theme, navigation | Changing how data is displayed |
+| `public/js/actions.js` | ~670 | ALL data mutations: user CRUD, request CRUD, approve/reject with notes, restock, PDF/CSV export, low-stock quick order | Changing business logic |
+| `public/js/auth.js` | ~150 | Auth state listener, profile loading, account suspension check, Firestore subscriptions | Changing auth flow or data subscriptions |
+| `public/js/app.js` | ~320 | `DOMContentLoaded` handler, all event listener wiring | Adding new buttons/interactions |
 | `functions/index.js` | ~70 | Cloud Function: auto-update budget when request is approved | Changing approval side-effects |
 
 ### Dependency Graph (no circular dependencies)
@@ -125,6 +125,7 @@ state.js ──────┘                  │
 | `email`      | string    | User's email address               |
 | `role`       | string    | One of: User, Purchasing, General Manager, System Administrator |
 | `department` | string    | User's assigned department          |
+| `status`     | string    | Account status: 'Active' or 'Suspended' |
 | `createdAt`  | timestamp | Account creation time               |
 
 ### `requests`
@@ -133,10 +134,11 @@ state.js ──────┘                  │
 | `department`     | string    | Requesting department                    |
 | `priority`       | string    | Normal, High, or Urgent                  |
 | `requiredBy`     | string    | Required delivery date (YYYY-MM-DD)      |
-| `notes`          | string    | Optional notes                           |
+| `notes`          | string    | Optional requester notes                 |
 | `items`          | array     | `[{name, quantity, unit, price}]`        |
 | `totalCost`      | number    | Sum of (price × quantity) for all items  |
 | `status`         | string    | Pending, Approved, or Rejected           |
+| `approvalNotes`  | string    | Optional notes from GM / Admin approval  |
 | `createdAt`      | timestamp | When the request was submitted           |
 | `createdBy`      | string    | UID of the requesting user               |
 | `createdByEmail` | string    | Email of the requesting user             |

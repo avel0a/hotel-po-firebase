@@ -49,7 +49,7 @@ The **Hotel Purchase Order System** is a web application designed for hotel oper
 |---|---|
 | **Purchase Requests** | Staff submit itemized requests with quantities, estimated costs, and priority levels |
 | **Approval Workflow** | The General Manager reviews and approves or rejects requests |
-| **Inventory Tracking** | Purchasing staff and admins manage stock levels; stock automatically decreases when items are received |
+| **Inventory Tracking** | Purchasing staff and admins manage stock levels; stock automatically increases when orders are received (restocking); 1-click quick-order for low-stock items |
 | **Budget Management** | Monthly budgets are set per department; approved request spending is tracked against them |
 | **Reporting** | Filterable reports with summary tables and downloadable PDF export |
 | **User Management** | System Administrators create accounts with specific roles and department assignments |
@@ -112,9 +112,11 @@ The **Hotel Purchase Order System** is a web application designed for hotel oper
 │                                            │            │
 │  ┌─────────────────────────────────────────┘            │
 │  │  Cloud Functions (Node.js)                           │
-│  │  └─ onRequestStatusChange: Firestore trigger         │
+│  │  └─ updateBudgetOnApproval: Firestore trigger         │
 │  │     → Updates budget spending when request approved   │
-│  │     → Decreases inventory stock when marked received  │
+│  │                                                       │
+│  │  Client-Side Mutations:                               │
+│  │     → Restocks inventory when goods marked received   │
 │  └──────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────┘
 ```
@@ -125,11 +127,9 @@ The **Hotel Purchase Order System** is a web application designed for hotel oper
 2. **User logs in** → Firebase Auth validates credentials, returns auth token
 3. **Auth state detected** → App loads user profile from `users` collection, sets up Firestore listeners
 4. **Real-time listeners** → `onSnapshot` on `requests`, `inventory`, `budgets`, `users` collections push data updates to all connected clients simultaneously
-5. **User submits a request** → Document written to `requests` collection
-6. **GM approves a request** → Status field updated, Cloud Function triggers:
-   - Calculates total cost and adds to the department's monthly budget `spending` field
-7. **User marks request as received** → Status field updated, Cloud Function triggers:
-   - Decreases `currentStock` on each item in the `inventory` collection
+5. **User submits a request** → Document written to `requests` collection with auto-recognized department
+6. **GM approves a request** → Status field updated with optional approval notes; Cloud Function triggers to update department monthly budget
+7. **User marks request as received** → Request marked as received; inventory stock is increased (restocked) for each received item matching inventory records
 
 ---
 
@@ -463,7 +463,7 @@ Shows all purchase requests submitted by the logged-in user (or all requests for
 | Action | When Available | What it does |
 |---|---|---|
 | **View** (eye icon) | Always | Opens a modal showing full request details including all items, costs, notes, and approval info |
-| **Mark Received** (check icon) | When status = `Approved` | Marks the request as received. **This triggers inventory stock decrease** via Cloud Function |
+| **Mark Received** (check icon) | When status = `Approved` | Marks the request as received. **Restocks inventory** by increasing on-hand stock for all received items matching inventory records |
 
 #### Request Details Modal
 
@@ -481,9 +481,9 @@ Clicking **View** opens a modal with:
 
 ### 9.5 Approvals
 
-**Location:** Sidebar → **Approvals** (visible to **General Manager** only)
+**Location:** Sidebar → **Approvals** (visible to **General Manager** and **System Administrator**)
 
-Shows all requests with `status = Pending` as expandable cards.
+Shows all requests with `status = Pending` as actionable cards.
 
 #### Each approval card shows:
 - Request ID and submission date
@@ -491,23 +491,22 @@ Shows all requests with `status = Pending` as expandable cards.
 - Department and priority
 - Items table (name, quantity, unit, price, subtotal)
 - Total cost
-- Notes
+- Requester notes
+- **Approval Notes textarea** — Input field for GM/Admin to provide optional comments, conditions, or feedback
 
 #### Actions per card:
 
 **Approve:**
-1. Click the green **Approve** button.
-2. A confirmation dialog appears.
-3. Confirm to approve.
-4. The request status changes to `Approved`.
-5. The Cloud Function triggers and adds the request's total cost to the department's monthly budget spending.
+1. (Optional) Enter notes or special instructions in the **Approval Notes** box.
+2. Click the green **Approve** button.
+3. The request status changes to `Approved`, saving the approval notes and timestamp.
+4. The Cloud Function triggers and adds the request's total cost to the department's monthly budget spending.
 
 **Reject:**
-1. Click the red **Reject** button.
-2. A prompt appears asking for a rejection reason.
-3. Enter the reason and confirm.
-4. The request status changes to `Rejected`.
-5. The rejection reason is stored on the request document.
+1. (Optional) Enter rejection reason or notes in the **Approval Notes** box.
+2. Click the red **Reject** button.
+3. The request status changes to `Rejected`, saving the rejection notes and timestamp.
+4. The approval/rejection notes are visible in the Request Details modal for both requester and management.
 
 ---
 
@@ -525,6 +524,18 @@ Provides full CRUD management for hotel inventory items.
   - 🟢 **In Stock** — `currentStock ≥ minimumStock`
   - 🟡 **Low Stock** — `currentStock > 0` but `< minimumStock`
   - 🔴 **Out of Stock** — `currentStock = 0`
+
+#### Quick Reorder for Low Stock ("Restock Low Items")
+
+At the top of the Inventory section, next to **Add Item**, there is an amber **Restock Low Items** button:
+1. Clicking **Restock Low Items** automatically scans the inventory cache for all items where `stock < min`.
+2. If all inventory levels are healthy, a friendly notification informs the user.
+3. If low-stock items are found, the app automatically switches to the **New Request** form, clears previous rows, and pre-populates item rows with:
+   - Item names matching low-stock goods
+   - Quantities calculated as `deficit = minimumStock - currentStock`
+   - Pre-filled unit prices from inventory records
+   - An auto-generated note: *"Auto-generated restock order for X low-stock item(s)."*
+4. Staff can review the order, adjust quantities if needed, and submit with one click.
 
 #### Adding an item
 
@@ -591,7 +602,7 @@ A bar chart at the bottom comparing budget allocations to actual spending for ea
 
 ---
 
-### 9.8 Reports & PDF Export
+### 9.8 Reports & PDF / Excel Export
 
 **Location:** Sidebar → **Reports** (visible to **General Manager**, **System Administrator**, **Purchasing**)
 
@@ -621,18 +632,18 @@ Summaries are computed at three levels: **weekly**, **monthly**, and **yearly**.
 A row-per-request table showing:
 - Date, Request ID, Requester, Department, Items (comma-separated), Total Cost, Priority, Status
 
-#### PDF Export
+#### Export Options
 
-Click **Download PDF** to generate a PDF of the currently filtered report.
+Users have two export formats available:
 
-The PDF includes:
-- Report title and generation date
-- Filter criteria applied
-- Summary table
-- Detailed request table
-- Auto-formatted with alternating row colors
+1. **PDF Export (`Download PDF`):**
+   - Click **Download PDF** to generate a formatted document via **jsPDF** and **AutoTable**.
+   - Includes header branding, generation timestamp, request summary table, and detailed request log with pagination.
 
-Generated using **jsPDF** with the **AutoTable** plugin for professional table rendering.
+2. **Excel / CSV Export (`Download Excel/CSV`):**
+   - Click **Download Excel/CSV** to export clean tabular data directly into a `.csv` file.
+   - Includes full columns: Date, Department, Total Cost, Requested By, Status, Items (with quantities), Priority, Notes, and Approval Notes.
+   - Encoded with UTF-8 BOM (`\uFEFF`) so Microsoft Excel opens special characters and formatting seamlessly without encoding errors.
 
 ---
 
@@ -688,7 +699,7 @@ The Existing Users table includes a live search bar and action controls:
     ┌────┴────┐
     ▼         ▼
 ┌────────┐ ┌──────────┐
-│Approved│ │ Rejected │ ← Reason stored
+│Approved│ │ Rejected │ ← Reason/Notes stored
 └───┬────┘ └──────────┘
     │
     │  Cloud Function:
@@ -696,11 +707,11 @@ The Existing Users table includes a live search bar and action controls:
     │
     ▼
 ┌──────────┐
-│ Received │ ← User clicks "Mark Received"
+│ Received │ ← Requester clicks "Mark Received"
 └──────────┘
     │
-    │  Cloud Function:
-    │  → Decreases inventory stock for each item
+    │  Client Action:
+    │  → Increases on-hand inventory stock (Restock)
     │
     ▼
   [Complete]
@@ -710,10 +721,10 @@ The Existing Users table includes a live search bar and action controls:
 
 | From | To | Triggered By | Side Effects |
 |---|---|---|---|
-| — | `Pending` | User submits request | Request document created |
-| `Pending` | `Approved` | GM clicks Approve | Cloud Function adds cost to budget `spending` |
-| `Pending` | `Rejected` | GM clicks Reject | Rejection reason saved |
-| `Approved` | `Received` | User clicks Mark Received | Cloud Function decreases inventory stock |
+| — | `Pending` | User submits request | Request document created with auto-department |
+| `Pending` | `Approved` | GM/Admin clicks Approve | Approval notes stored; Cloud Function adds cost to budget `spending` |
+| `Pending` | `Rejected` | GM/Admin clicks Reject | Rejection notes stored |
+| `Approved` | `Received` | Requester clicks Mark Received | Client increases on-hand inventory stock (restock) |
 
 ---
 
@@ -744,36 +755,30 @@ When a listener fires, the cache is replaced entirely with the new snapshot, and
 
 ## 12. Cloud Functions
 
-### `onRequestStatusChange`
+### `updateBudgetOnApproval`
 
 **Trigger:** Firestore document update on `requests/{requestId}`
 
-**Purpose:** Automates side effects when a request's status changes.
+**Purpose:** Automatically tracks department spending when a request is approved.
 
 #### Behavior
 
 ```javascript
-// Pseudo-code
-if (statusChanged from !== 'Approved' && statusChanged to === 'Approved') {
-    // Add total cost to the department's monthly budget spending
+// Pseudo-code (functions/index.js)
+if (before.status !== 'Approved' && after.status === 'Approved') {
+    // Atomically increment spentAmount for the department's monthly budget
     budgetDoc = budgets/{Department}_{YYYY-MM}
-    budgetDoc.spending += request.totalCost
-}
-
-if (statusChanged from !== 'Received' && statusChanged to === 'Received') {
-    // Decrease inventory stock for each item
-    for each item in request.items {
-        inventoryItem = findByName(item.name)
-        inventoryItem.currentStock -= item.quantity
-    }
+    transaction.update(budgetRef, { spentAmount: FieldValue.increment(totalCost) })
 }
 ```
+
+> **Note on Restocking:** When the user marks a request as received in the app, the client-side `markRequestAsReceived` action directly queries the matching inventory items and atomically increases the `stock` count (`stock + quantityReceived`).
 
 #### Budget document ID format
 
 The Cloud Function uses the format `Department_YYYY-MM` (e.g., `Kitchen_2026-11`) when writing budget spending updates.
 
-> **Known Issue:** The client-side budget management UI creates budget documents with the format `YYYY-MM_Department` (e.g., `2026-11_Kitchen`). This means the Cloud Function may create a separate document from what the UI shows. See [Known Limitations](#18-known-limitations) for details.
+> **Known Issue:** The client-side budget management UI creates budget documents with the format `YYYY-MM_Department` (e.g., `2026-11_Kitchen`). See [Known Limitations](#18-known-limitations) for details.
 
 ---
 
@@ -881,11 +886,12 @@ firebase deploy --only firestore:rules  # Security rules only
 
 - [ ] Visit the Hosting URL shown in deployment output
 - [ ] Test login with an existing account
-- [ ] Create a test purchase request
+- [ ] Create a test purchase request (verify auto-assigned department)
 - [ ] Verify real-time updates by opening the app in two browser tabs
-- [ ] Test approval flow (with a GM account)
-- [ ] Test inventory stock decrease by marking a request as received
-- [ ] Verify PDF export generates correctly
+- [ ] Test approval flow with optional notes (with a GM or Admin account)
+- [ ] Test inventory restocking by marking an approved request as received
+- [ ] Test "Restock Low Items" quick-order button in Inventory
+- [ ] Verify PDF and Excel/CSV exports generate correctly from Reports
 
 ### Firebase Hosting URL
 
@@ -925,8 +931,8 @@ Uses Tailwind's default breakpoints:
 - Accounts are created by the System Administrator — contact them if you don't have credentials.
 - Check if the Firebase Auth service is enabled in the Firebase Console (Authentication → Sign-in Method → Email/Password should be **Enabled**).
 
-**Q: After creating a new user, I got logged out.**
-- This is expected behavior. Firebase client-side Auth signs in as the new user during creation. The app re-authenticates the admin automatically by prompting for the admin password.
+**Q: Does creating a new user log out the administrator?**
+- No. The system uses an in-memory secondary Firebase app instance to register the new user in Authentication and Firestore. The active administrator session remains completely uninterrupted.
 
 ### Data Not Loading
 
@@ -940,11 +946,14 @@ Uses Tailwind's default breakpoints:
 - This should work automatically via real-time listeners. Check if the other user's browser tab is still connected (no offline indicator).
 - Hard-refresh the page (Ctrl+Shift+R) to re-establish listeners.
 
-### Inventory
+### Inventory & Restocking
 
-**Q: Stock didn't decrease after marking a request as received.**
-- The Cloud Function handles this. Check the Functions log in the Firebase Console for errors.
-- The function matches inventory items by **exact name**. If the item name in the request doesn't match any inventory item name, stock won't decrease.
+**Q: Stock didn't increase after marking a request as received.**
+- The application restocks matching inventory items by **exact name**. If the item name in the request doesn't match an item in the inventory collection, the app displays a note indicating the item wasn't in inventory.
+- Ensure the item is already added to Inventory before receiving requests.
+
+**Q: How does the "Restock Low Items" button work?**
+- It filters cached inventory for items where `stock < min` and takes you to New Request with line items populated with the required deficit quantity (`min - stock`).
 
 ### Budgets
 
@@ -969,7 +978,7 @@ Uses Tailwind's default breakpoints:
 **Q: Cloud Functions fail after deployment.**
 - Check the Functions log: Firebase Console → Functions → Logs.
 - Run `cd functions && npm install` before deploying to ensure all dependencies are installed.
-- Ensure Node.js version matches `engines.node` in `functions/package.json` (currently "18").
+- Ensure Node.js version matches `engines.node` in `functions/package.json` (currently "22").
 
 ---
 
@@ -979,31 +988,31 @@ Uses Tailwind's default breakpoints:
 
 The Cloud Function (`functions/index.js`) creates/updates budget documents with the ID format `Department_YYYY-MM` (e.g., `Kitchen_2026-11`), while the client-side UI creates budgets with the format `YYYY-MM_Department` (e.g., `2026-11_Kitchen`).
 
-**Impact:** When the Cloud Function updates spending for an approved request, it may create a separate document from the one the UI displays. The budget overview table may show \$0 spending even though spending has been recorded in a differently-named document.
+**Impact:** When the Cloud Function updates spending for an approved request, it may create a separate document from the one the UI displays. The client UI calculates actual spending dynamically from approved requests.
 
 **Workaround:** Manually check the `budgets` collection in the Firebase Console for duplicate entries.
 
-### 3. Client-Side Security Only
+### 2. Client-Side Security Rules
 
-Role-based access is enforced primarily in the UI (hiding/showing elements). The Firestore rules allow any authenticated user to read/write all collections. A user with developer tools knowledge could bypass UI restrictions.
+Role-based access is enforced primarily in the UI (hiding/showing elements and role checks in action functions). The default Firestore rules allow any authenticated user to read/write collections.
 
-**Recommendation:** Implement server-side role checking using Firebase Custom Claims or granular Firestore rules.
+**Recommendation:** Implement server-side role checking using Firebase Custom Claims or granular Firestore rules if untrusted clients are expected.
 
-### 4. Pagination for Large Datasets
+### 3. Pagination for Large Datasets
 
-Request lists and inventory tables load active documents into memory. For very large datasets (thousands of records), cursor-based pagination should be added.
+Request lists and inventory tables load active documents into memory (requests are filtered to the last 120 days on load). For very large datasets (thousands of records), cursor-based pagination should be added.
 
-### 6. CDN Dependency
+### 4. CDN Dependency
 
 All third-party libraries (Tailwind, Chart.js, jsPDF, Font Awesome, Google Fonts) are loaded from CDNs. The app requires an internet connection and will not work offline.
 
-### 7. Single Approver Model
+### 5. Single Approver Step
 
-Only the **General Manager** role can approve requests. There is no multi-level approval chain, delegation, or approval thresholds.
+Both General Manager and System Administrator roles can approve or reject requests. There is currently no multi-level approval chain (e.g. supervisor → GM) or threshold-based approval workflow.
 
-### 8. No Audit Log
+### 6. No Audit Log
 
-Status changes, inventory modifications, and user actions are not logged in an audit trail. Only the final state is stored.
+Status changes, inventory modifications, and user actions are not logged in an audit trail collection. Only the final state is stored on the document.
 
 ---
 
