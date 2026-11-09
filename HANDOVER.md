@@ -212,6 +212,18 @@ public/
 ### 6. `settings` (`settings/permissions`)
 * Keyed by role name containing array of authorized permission strings.
 
+### 7. `notifications`
+* `recipientRole`: string (`'General Manager'`, `'Storekeeper'`, `'Purchasing'`, `'All'`)
+* `recipientUserId`: string (specific user UID, or null for role broadcast)
+* `title`: string
+* `message`: string
+* `type`: string (`'new_request'`, `'approved'`, `'rejected'`, `'ordered'`, `'issued'`, `'received'`, `'info'`)
+* `requestId`: string
+* `requestType`: string (`'requisition'` or `'purchase'`)
+* `department`: string
+* `readBy`: array of strings (UIDs of users who marked this notification as read)
+* `createdAt`: timestamp
+
 ---
 
 ## 7. Security & Database Rules
@@ -227,10 +239,43 @@ Enforced via `firestore.rules`:
 * **Storekeeper Inventory Lock:** Writes to `/inventory/{itemId}` and `/stock_movements/{movementId}` strictly require `Storekeeper` or `System Administrator`.
 * **Immutable Audit Trail:** `/stock_movements/{movementId}` update and delete operations are permanently rejected (`allow update, delete: if false;`).
 * **Budgets, Departments, Settings:** Modifiable only by `General Manager` and `System Administrator`.
+* **In-App Notifications:** Authenticated users can read, create, and mark read; deletion restricted to `General Manager` and `System Administrator`.
 
 ---
 
-## 8. Deployment & Routine Maintenance
+## 8. Package Conversions & Dynamic Unit Pricing
+
+The system solves the unit-of-measure pricing mismatch (e.g., 1 Kg of sugar vs. 1 Box or 25 Kg Bag of sugar):
+1. **Base Unit & Package Size Configuration:**
+   - In **Inventory & Store > Add/Edit Item**, items define their **Base Unit** (`Kg`, `Liter`, `Each`, `Box`, `Bottle`, `Bag`, `Pack`, `Roll`, `Can`, `Set`, `Carton`) and **Units per Package** (e.g. 25 kg per bag, 24 bottles per carton).
+2. **Dynamic Request Form Calculation:**
+   - In **New Request**, when an item is selected, its base unit price and package multiplier are loaded.
+   - When the user selects a package unit (e.g., switching from `Kg` to `Bag` or `Box`), the unit price automatically scales by the package multiplier (`price * packageSize` or default package ratio).
+   - The **Unit Price (Birr)** column is visible and directly editable, giving staff full transparency and manual flexibility before submission.
+   - Subtotal (`quantity * unitPrice`) and total estimated cost recalculate live in real-time.
+
+---
+
+## 9. Real-Time In-App Notification System
+
+1. **Header Notification Bell:**
+   - Real-time Firestore subscription (`/notifications`) with an unread badge counter.
+   - Dropdown feed showing recent alerts with distinct color-coded icons (New Request, Approved, Rejected, Ordered, Issued, Received).
+   - One-click navigation to the relevant request view.
+   - "Mark all read" button.
+2. **Automated Cross-Role Workflow Alerts:**
+   - **New Request Submitted:** Alerts the **Approval Manager** (`General Manager` / `System Administrator`).
+   - **Requisition Approved (Flow A):** Alerts the **Storekeeper** to issue goods from the warehouse.
+   - **Purchase Order Approved (Flow B):** Alerts the **Purchasing Team** to place the order with vendors.
+   - **PO Marked as Ordered:** Alerts the **Storekeeper** that vendor goods have been ordered and will arrive soon.
+   - **Goods Issued / Received:** Alerts the **Requester** and **Purchasing Team**.
+3. **Sidebar Badge Counters:**
+   - **Approvals Badge:** Displays count of pending requests for General Manager and Admin.
+   - **Inventory & Store Badge:** Displays count of pending actions (approved requisitions to issue + ordered POs to receive) for Storekeeper and Admin.
+
+---
+
+## 10. Deployment & Routine Maintenance
 
 ### Deployment Command
 Always use quotes when deploying multiple targets on Windows PowerShell:

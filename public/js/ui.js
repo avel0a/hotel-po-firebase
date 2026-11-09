@@ -5,7 +5,7 @@
 
 import state from './state.js';
 import { doc, getDoc } from './firebase.js';
-import { DEPARTMENTS, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS } from './config.js';
+import { DEPARTMENTS, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, UNITS, DEFAULT_UNIT_MULTIPLIERS } from './config.js';
 
 // ============================================================================
 // Loading Overlay
@@ -435,10 +435,22 @@ export function showItemModal(item = null) {
                         <div><label for="item-name" class="block text-sm font-medium text-gray-700 mb-1">Item Name</label><input type="text" id="item-name" class="item-name w-full p-2 border border-gray-300 rounded-md transition-colors duration-300" required></div>
                         <div><label for="item-category" class="block text-sm font-medium text-gray-700 mb-1">Category</label><select id="item-category" class="w-full p-2 border border-gray-300 rounded-md transition-colors duration-300"><option>Housekeeping</option><option>Kitchen</option><option>Maintenance</option><option>Office</option><option>Information Technology</option><option>Food&Beverage</option><option>SPA</option><option>Security</option><option>Finance</option><option>Other</option></select></div>
                         <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label for="item-unit" class="block text-sm font-medium text-gray-700 mb-1">Base Unit</label>
+                                <select id="item-unit" class="w-full p-2 border border-gray-300 rounded-md transition-colors duration-300">
+                                    ${UNITS.map(u => `<option value="${u}">${u}</option>`).join('')}
+                                </select>
+                            </div>
+                            <div>
+                                <label for="item-package-size" class="block text-sm font-medium text-gray-700 mb-1" title="Number of base units in one box/bag/pack">Units per Package</label>
+                                <input type="number" min="1" step="1" id="item-package-size" value="1" placeholder="e.g. 25 for 25kg/bag" class="w-full p-2 border border-gray-300 rounded-md transition-colors duration-300">
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
                             <div><label for="item-stock" class="block text-sm font-medium text-gray-700 mb-1">Current Stock</label><input type="number" id="item-stock" class="w-full p-2 border border-gray-300 rounded-md transition-colors duration-300" required></div>
                             <div><label for="item-min" class="block text-sm font-medium text-gray-700 mb-1">Minimum Level</label><input type="number" id="item-min" class="w-full p-2 border border-gray-300 rounded-md transition-colors duration-300" required></div>
                         </div>
-                        <div><label for="item-price" class="block text-sm font-medium text-gray-700 mb-1">Price (Birr)</label><input type="number" step="0.01" id="item-price" class="w-full p-2 border border-gray-300 rounded-md transition-colors duration-300" required></div>
+                        <div><label for="item-price" class="block text-sm font-medium text-gray-700 mb-1">Base Unit Price (Birr)</label><input type="number" step="0.01" id="item-price" class="w-full p-2 border border-gray-300 rounded-md transition-colors duration-300" required></div>
                     </div>
                     <div class="flex justify-end space-x-3 mt-6">
                         <button type="button" id="cancel-item-modal-btn" class="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700 transition-colors">Cancel</button>
@@ -459,12 +471,16 @@ export function showItemModal(item = null) {
         modal.querySelector('#item-id').value = item.id;
         modal.querySelector('#item-name').value = item.name;
         modal.querySelector('#item-category').value = item.category;
+        modal.querySelector('#item-unit').value = item.unit || 'Each';
+        modal.querySelector('#item-package-size').value = item.packageSize || 1;
         modal.querySelector('#item-stock').value = item.stock;
         modal.querySelector('#item-min').value = item.min;
         modal.querySelector('#item-price').value = item.price || 0;
     } else {
         if (modalTitle) modalTitle.textContent = 'Add New Inventory Item';
         modal.querySelector('#item-id').value = '';
+        modal.querySelector('#item-unit').value = 'Each';
+        modal.querySelector('#item-package-size').value = 1;
     }
     modal.classList.remove('hidden', 'opacity-0', 'invisible');
 }
@@ -1435,34 +1451,80 @@ export function addRequestItemRow() {
     const container = document.getElementById('items-container');
     if (!container) return;
     const itemRow = document.createElement('div');
-    itemRow.className = 'item-row grid grid-cols-12 gap-2 md:gap-4 items-end';
+    itemRow.className = 'item-row grid grid-cols-12 gap-2 md:gap-3 items-center bg-gray-50/50 dark:bg-gray-800/40 p-2 rounded-lg border border-gray-100 dark:border-gray-700/50';
+    itemRow.dataset.basePrice = "0";
+    itemRow.dataset.baseUnit = "Each";
+    itemRow.dataset.packageSize = "1";
     itemRow.innerHTML = `
-        <div class="col-span-12 md:col-span-5">
-            <label class="block text-sm font-medium text-gray-700 mb-1">Item Name</label>
-            <input type="text" class="item-name w-full p-2 border border-gray-300 rounded-md transition-colors duration-300" list="inventory-items-list" required>
+        <div class="col-span-12 md:col-span-4">
+            <label class="block md:hidden text-xs font-semibold text-gray-500 mb-1">Item Name</label>
+            <input type="text" class="item-name w-full p-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md transition-colors duration-300 text-sm" list="inventory-items-list" placeholder="Search item..." required>
             <datalist id="inventory-items-list"></datalist>
-            <input type="hidden" class="item-price">
         </div>
-        <div class="col-span-5 md:col-span-2">
-            <label class="block text-sm font-medium text-gray-700 mb-1">Quantity</label>
-            <input type="number" min="1" class="item-quantity w-full p-2 border border-gray-300 rounded-md transition-colors duration-300" required>
+        <div class="col-span-6 md:col-span-2">
+            <label class="block md:hidden text-xs font-semibold text-gray-500 mb-1">Quantity</label>
+            <input type="number" min="1" value="1" class="item-quantity w-full p-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md transition-colors duration-300 text-sm text-center" required>
         </div>
-        <div class="col-span-4 md:col-span-2">
-            <label class="block text-sm font-medium text-gray-700 mb-1">Unit</label>
-            <select class="item-unit w-full p-2 border border-gray-300 rounded-md transition-colors duration-300">
-                <option>Each</option><option>Box</option><option>Kg</option><option>Liter</option><option>Set</option>
+        <div class="col-span-6 md:col-span-2">
+            <label class="block md:hidden text-xs font-semibold text-gray-500 mb-1">Unit</label>
+            <select class="item-unit w-full p-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md transition-colors duration-300 text-sm">
+                ${UNITS.map(u => `<option value="${u}">${u}</option>`).join('')}
             </select>
         </div>
-        <div class="col-span-3 md:col-span-2">
-            <label class="block text-sm font-medium text-gray-700 mb-1">Subtotal</label>
-            <span class="item-subtotal block p-2 text-gray-800 dark:text-gray-200 font-medium">Birr 0.00</span>
+        <div class="col-span-6 md:col-span-2">
+            <label class="block md:hidden text-xs font-semibold text-gray-500 mb-1">Unit Price (Birr)</label>
+            <input type="number" step="0.01" min="0" value="0.00" class="item-price w-full p-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md transition-colors duration-300 text-sm text-right" required>
         </div>
-        <div class="col-span-12 md:col-span-1 flex justify-end items-end pb-1">
-            <button type="button" class="remove-item-btn p-2 text-red-500 hover:text-red-700 transition-colors" aria-label="Remove item"><i class="fas fa-trash"></i></button>
+        <div class="col-span-4 md:col-span-1 text-right">
+            <label class="block md:hidden text-xs font-semibold text-gray-500 mb-1">Subtotal</label>
+            <span class="item-subtotal block p-2 text-gray-900 dark:text-gray-100 font-semibold text-sm">Birr 0.00</span>
+        </div>
+        <div class="col-span-2 md:col-span-1 flex justify-center items-center">
+            <button type="button" class="remove-item-btn p-2 text-red-500 hover:text-red-700 transition-colors" title="Remove row" aria-label="Remove item"><i class="fas fa-trash"></i></button>
         </div>
     `;
     container.appendChild(itemRow);
     populateItemNameDatalist();
+}
+
+/**
+ * Automatically recalculates unit price when user selects a different unit of measure.
+ * e.g., Base unit is Kg (120 Birr), selecting Box or Bag scales price accordingly.
+ */
+export function handleItemRowUnitChange(row) {
+    if (!row) return;
+    const unitSelect = row.querySelector('.item-unit');
+    const priceInput = row.querySelector('.item-price');
+    if (!unitSelect || !priceInput) return;
+
+    const selectedUnit = unitSelect.value;
+    const baseUnit = row.dataset.baseUnit || 'Each';
+    const basePrice = parseFloat(row.dataset.basePrice) || 0;
+    const packageSize = parseFloat(row.dataset.packageSize) || 1;
+
+    if (basePrice > 0) {
+        let computedPrice = basePrice;
+        if (selectedUnit === baseUnit) {
+            computedPrice = basePrice;
+        } else {
+            const isSelectedPackage = ['Box', 'Bag', 'Pack', 'Carton'].includes(selectedUnit);
+            const isBasePackage = ['Box', 'Bag', 'Pack', 'Carton'].includes(baseUnit);
+
+            if (isSelectedPackage && !isBasePackage) {
+                const multiplier = packageSize > 1 ? packageSize : (DEFAULT_UNIT_MULTIPLIERS[selectedUnit] || 1);
+                computedPrice = basePrice * multiplier;
+            } else if (!isSelectedPackage && isBasePackage) {
+                const multiplier = packageSize > 1 ? packageSize : (DEFAULT_UNIT_MULTIPLIERS[baseUnit] || 1);
+                computedPrice = multiplier > 0 ? (basePrice / multiplier) : basePrice;
+            } else {
+                const mSelected = DEFAULT_UNIT_MULTIPLIERS[selectedUnit] || 1;
+                const mBase = DEFAULT_UNIT_MULTIPLIERS[baseUnit] || 1;
+                computedPrice = basePrice * (mSelected / mBase);
+            }
+        }
+        priceInput.value = computedPrice.toFixed(2);
+    }
+    updateItemSubtotal(row);
 }
 
 export function populateItemNameDatalist() {
@@ -1886,9 +1948,9 @@ export function renderInventory(items, searchTerm = '') {
             <tr class="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
                 <td class="px-6 py-4 whitespace-nowrap">${item.name}</td>
                 <td class="px-6 py-4 whitespace-nowrap">${item.category}</td>
-                <td class="px-6 py-4 whitespace-nowrap">Birr ${(item.price || 0).toFixed(2)}</td>
-                <td class="px-6 py-4 whitespace-nowrap">${item.stock}</td>
-                <td class="px-6 py-4 whitespace-nowrap">${item.min}</td>
+                <td class="px-6 py-4 whitespace-nowrap">Birr ${(item.price || 0).toFixed(2)}${item.unit ? ' / ' + item.unit : ''}</td>
+                <td class="px-6 py-4 whitespace-nowrap">${item.stock} ${item.unit || ''}</td>
+                <td class="px-6 py-4 whitespace-nowrap">${item.min} ${item.unit || ''}</td>
                 <td class="px-6 py-4 whitespace-nowrap"><span class="px-2 py-1 text-xs rounded-full bg-${color}-100 text-${color}-800 dark:bg-${color}-700 dark:text-${color}-200">${status}</span></td>
                 ${actionsHtml}
             </tr>
@@ -2647,6 +2709,126 @@ export function downloadStockReconciliationCsv() {
     } catch (err) {
         console.error('Reconciliation export failed:', err);
         showNotification("Failed to export reconciliation report.", true);
+    }
+}
+
+// ============================================================================
+// Notification Rendering
+// ============================================================================
+
+export function toggleNotificationDropdown(forceOpen = null) {
+    const dropdown = document.getElementById('notification-dropdown');
+    if (!dropdown) return;
+    const isHidden = dropdown.classList.contains('hidden');
+    const shouldOpen = forceOpen !== null ? forceOpen : isHidden;
+
+    if (shouldOpen) {
+        dropdown.classList.remove('hidden');
+        setTimeout(() => {
+            dropdown.classList.remove('opacity-0', 'scale-95');
+            dropdown.classList.add('opacity-100', 'scale-100');
+        }, 10);
+    } else {
+        dropdown.classList.remove('opacity-100', 'scale-100');
+        dropdown.classList.add('opacity-0', 'scale-95');
+        setTimeout(() => {
+            dropdown.classList.add('hidden');
+        }, 200);
+    }
+}
+
+export function renderNotificationBell() {
+    const badge = document.getElementById('notification-badge');
+    const list = document.getElementById('notifications-list');
+    if (!list) return;
+
+    const myNotifications = (state.notificationsCache || []).filter(n => {
+        if (!state.userId) return false;
+        if (n.recipientUserId && n.recipientUserId === state.userId) return true;
+        if (n.recipientRole === 'All') return true;
+        if (n.recipientRole && n.recipientRole === state.userRole) return true;
+        if (state.userRole === 'System Administrator') return true;
+        return false;
+    });
+
+    const unreadCount = myNotifications.filter(n => !Array.isArray(n.readBy) || !n.readBy.includes(state.userId)).length;
+
+    if (badge) {
+        if (unreadCount > 0) {
+            badge.textContent = unreadCount > 99 ? '99+' : unreadCount;
+            badge.classList.remove('hidden');
+        } else {
+            badge.classList.add('hidden');
+        }
+    }
+
+    if (myNotifications.length === 0) {
+        list.innerHTML = `<div class="p-6 text-center text-xs text-gray-400">No new notifications.</div>`;
+        return;
+    }
+
+    list.innerHTML = myNotifications.slice(0, 30).map(n => {
+        const isRead = Array.isArray(n.readBy) && n.readBy.includes(state.userId);
+        let iconHtml = '<i class="fas fa-bell text-amber-500"></i>';
+        if (n.type === 'new_request') iconHtml = '<i class="fas fa-file-invoice text-blue-500"></i>';
+        else if (n.type === 'approved') iconHtml = '<i class="fas fa-check-circle text-emerald-500"></i>';
+        else if (n.type === 'rejected') iconHtml = '<i class="fas fa-times-circle text-rose-500"></i>';
+        else if (n.type === 'ordered') iconHtml = '<i class="fas fa-truck text-indigo-500"></i>';
+        else if (n.type === 'issued') iconHtml = '<i class="fas fa-dolly text-purple-500"></i>';
+        else if (n.type === 'received') iconHtml = '<i class="fas fa-boxes text-emerald-600"></i>';
+
+        const timeStr = n.createdAt?.toDate ? n.createdAt.toDate().toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Just now';
+
+        return `
+            <div class="notification-item p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-colors flex items-start space-x-3 ${isRead ? 'opacity-70' : 'bg-blue-50/40 dark:bg-blue-950/20 font-medium'}" data-id="${n.id}" data-request-id="${n.requestId || ''}">
+                <div class="text-base mt-0.5 flex-shrink-0">${iconHtml}</div>
+                <div class="flex-1 min-w-0">
+                    <div class="flex justify-between items-baseline mb-0.5">
+                        <span class="text-xs font-semibold text-gray-800 dark:text-gray-200 truncate">${n.title || 'Notification'}</span>
+                        <span class="text-[10px] text-gray-400 ml-2 whitespace-nowrap">${timeStr}</span>
+                    </div>
+                    <p class="text-xs text-gray-600 dark:text-gray-300 line-clamp-2 leading-relaxed">${n.message || ''}</p>
+                </div>
+                ${!isRead ? '<span class="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0 mt-1.5" title="Unread"></span>' : ''}
+            </div>
+        `;
+    }).join('');
+}
+
+export function updateSidebarBadges() {
+    const approvalsBadge = document.getElementById('sidebar-approvals-badge');
+    const storeBadge = document.getElementById('sidebar-store-badge');
+    const requests = state.allRequestsCache || [];
+
+    if (approvalsBadge) {
+        if (state.userRole === 'General Manager' || state.userRole === 'System Administrator') {
+            const pendingApprovals = requests.filter(r => r.status === 'Pending').length;
+            if (pendingApprovals > 0) {
+                approvalsBadge.textContent = pendingApprovals;
+                approvalsBadge.classList.remove('hidden');
+            } else {
+                approvalsBadge.classList.add('hidden');
+            }
+        } else {
+            approvalsBadge.classList.add('hidden');
+        }
+    }
+
+    if (storeBadge) {
+        if (state.userRole === 'Storekeeper' || state.userRole === 'Store Keeper' || state.userRole === 'System Administrator') {
+            const pendingStore = requests.filter(r =>
+                (r.status === 'Approved' && (r.requestType === 'Requisition' || r.requestType === 'requisition')) ||
+                (r.status === 'Ordered')
+            ).length;
+            if (pendingStore > 0) {
+                storeBadge.textContent = pendingStore;
+                storeBadge.classList.remove('hidden');
+            } else {
+                storeBadge.classList.add('hidden');
+            }
+        } else {
+            storeBadge.classList.add('hidden');
+        }
     }
 }
 

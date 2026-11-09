@@ -9,7 +9,7 @@ import {
     signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut,
     sendPasswordResetEmail, initializeApp, deleteApp, getAuth,
     doc, collection, addDoc, setDoc, updateDoc, deleteDoc,
-    query, where, serverTimestamp, getDoc, getDocs
+    query, where, serverTimestamp, getDoc, getDocs, arrayUnion
 } from './firebase.js';
 import {
     showLoadingOverlay, hideLoadingOverlay, showNotification,
@@ -217,6 +217,32 @@ export function handleDeleteUser(userId, userEmail) {
 }
 
 // ============================================================================
+// Notification Helper
+// ============================================================================
+
+/**
+ * Emits an in-app notification document into Firestore for staff members.
+ */
+export async function createInAppNotification({ recipientRole = 'All', recipientUserId = null, title, message, type = 'info', requestId = '', requestType = '', department = '' }) {
+    try {
+        await addDoc(collection(state.db, 'notifications'), {
+            recipientRole,
+            recipientUserId,
+            title,
+            message,
+            type,
+            requestId,
+            requestType,
+            department,
+            readBy: [],
+            createdAt: serverTimestamp()
+        });
+    } catch (e) {
+        console.warn("Could not create notification:", e);
+    }
+}
+
+// ============================================================================
 // Purchase Request Actions
 // ============================================================================
 
@@ -271,8 +297,21 @@ export async function handleRequestFormSubmit(e) {
 
     showLoadingOverlay();
     try {
-        await addDoc(collection(state.db, 'requests'), newRequest);
+        const docRef = await addDoc(collection(state.db, 'requests'), newRequest);
         showNotification("Request submitted successfully!");
+
+        // Emit notification to Approval Manager (General Manager / System Administrator)
+        const isPO = requestType === 'Purchase Order' || requestType === 'purchase';
+        await createInAppNotification({
+            recipientRole: 'General Manager',
+            title: isPO ? 'New Purchase Order Submitted' : 'New Department Requisition',
+            message: `${department} (${state.auth.currentUser?.email || 'Staff'}) submitted request #${docRef.id.substring(0, 8)} for ${items.length} item(s) (Total: Birr ${totalCost.toFixed(2)}). Awaiting approval.`,
+            type: 'new_request',
+            requestId: docRef.id,
+            requestType: requestType,
+            department: department
+        });
+
         showSection('dashboard');
         e.target.reset();
         document.getElementById('items-container').innerHTML = '';
@@ -296,12 +335,69 @@ export async function updateRequestStatus(id, newStatus, approvalNotes = '') {
     }
     showLoadingOverlay();
     try {
+        const reqDocRef = doc(state.db, 'requests', id);
+        const reqSnap = await getDoc(reqDocRef);
+        const reqData = reqSnap.exists() ? reqSnap.data() : (state.allRequestsCache.find(r => r.id === id) || {});
+
         const updateData = { status: newStatus, processedAt: serverTimestamp() };
         if (approvalNotes && approvalNotes.trim()) {
             updateData.approvalNotes = approvalNotes.trim();
         }
-        await setDoc(doc(state.db, 'requests', id), updateData, { merge: true });
+        await setDoc(reqDocRef, updateData, { merge: true });
         showNotification(`Request has been ${newStatus.toLowerCase()}.`);
+
+        const isPO = reqData.requestType === 'purchase' || reqData.requestType === 'Purchase Order' || reqData.department === 'Store' || reqData.department === 'Purchasing';
+
+        if (newStatus === 'Approved') {
+            if (isPO) {
+                // Flow B: Purchase Order -> Notify Purchasing Team to place order
+                await createInAppNotification({
+                    recipientRole: 'Purchasing',
+                    title: 'Purchase Order Approved',
+                    message: `PO #${id.substring(0, 8)} for ${reqData.department || 'Hotel'} approved by General Manager. Ready to place order with vendor.`,
+                    type: 'approved',
+                    requestId: id,
+                    requestType: 'purchase',
+                    department: reqData.department || 'Store'
+                });
+            } else {
+                // Flow A: Department Requisition -> Notify Storekeeper to issue items
+                await createInAppNotification({
+                    recipientRole: 'Storekeeper',
+                    title: 'Store Requisition Approved',
+                    message: `Requisition #${id.substring(0, 8)} for ${reqData.department || 'Department'} approved by General Manager. Ready to issue goods to staff.`,
+                    type: 'approved',
+                    requestId: id,
+                    requestType: 'requisition',
+                    department: reqData.department || 'Store'
+                });
+            }
+
+            // Notify original requester
+            if (reqData.createdBy) {
+                await createInAppNotification({
+                    recipientUserId: reqData.createdBy,
+                    title: `Your ${reqData.department || ''} Request Was Approved`,
+                    message: `Your request #${id.substring(0, 8)} has been approved by GM.${approvalNotes ? ' Notes: ' + approvalNotes : ''}`,
+                    type: 'approved',
+                    requestId: id,
+                    requestType: reqData.requestType || 'requisition',
+                    department: reqData.department || ''
+                });
+            }
+        } else if (newStatus === 'Rejected') {
+            if (reqData.createdBy) {
+                await createInAppNotification({
+                    recipientUserId: reqData.createdBy,
+                    title: `Your ${reqData.department || ''} Request Was Rejected`,
+                    message: `Your request #${id.substring(0, 8)} was rejected.${approvalNotes ? ' Reason: ' + approvalNotes : ''}`,
+                    type: 'rejected',
+                    requestId: id,
+                    requestType: reqData.requestType || 'requisition',
+                    department: reqData.department || ''
+                });
+            }
+        }
     } catch (error) {
         console.error(`Error updating request to ${newStatus}:`, error);
         showNotification("Failed to update status.", true);
@@ -458,6 +554,17 @@ export async function handleMarkAsOrdered(e) {
         await setDoc(doc(state.db, 'requests', reqId), updateData, { merge: true });
         hideOrderPOModal();
         showNotification(`Order placed with ${supplier}! Request is now Ordered. Storekeeper will receive goods upon delivery.`);
+
+        // Notify Storekeeper that goods have been ordered and will arrive
+        await createInAppNotification({
+            recipientRole: 'Storekeeper',
+            title: 'PO Ordered with Supplier',
+            message: `PO #${reqId.substring(0, 8)} ordered from ${supplier}. Expected delivery: ${deliveryDate}. Ready to receive upon arrival.`,
+            type: 'ordered',
+            requestId: reqId,
+            requestType: 'purchase',
+            department: 'Store'
+        });
     } catch (error) {
         console.error("Error marking PO as ordered:", error);
         showNotification("Failed to update purchase order.", true);
@@ -603,6 +710,19 @@ export async function handleIssueRequisitionSubmit(e) {
             ? `Requisition #${reqId.substring(0, 8)} fully issued to ${recipient}! Store stock decreased.`
             : `Requisition #${reqId.substring(0, 8)} partially issued (${totalIssuedThisTime} units). Store stock decreased.`
         );
+
+        // Notify original requester that items were issued
+        if (reqData.createdBy) {
+            await createInAppNotification({
+                recipientUserId: reqData.createdBy,
+                title: allFulfilled ? 'Requisition Items Issued' : 'Requisition Partially Issued',
+                message: `${totalIssuedThisTime} unit(s) issued for request #${reqId.substring(0, 8)} to ${recipient}. Available for pickup.`,
+                type: 'issued',
+                requestId: reqId,
+                requestType: 'requisition',
+                department: reqData.department || ''
+            });
+        }
     } catch (error) {
         console.error("Error issuing requisition:", error);
         showNotification("Failed to issue requisition items. Check console for details.", true);
@@ -791,6 +911,30 @@ export async function handleReceiveGoodsSubmit(e) {
             ? `PO #${reqId.substring(0, 8)} fully received into Store! Stock increased.`
             : `PO #${reqId.substring(0, 8)} partially received (${totalReceivedThisTime} units). Stock increased.`
         );
+
+        // Notify Purchasing team that items have arrived
+        await createInAppNotification({
+            recipientRole: 'Purchasing',
+            title: allFulfilled ? 'PO Delivery Fully Received' : 'PO Delivery Partially Received',
+            message: `${totalReceivedThisTime} unit(s) received into store for PO #${reqId.substring(0, 8)}${invoice ? ' (Inv: ' + invoice + ')' : ''}.`,
+            type: 'received',
+            requestId: reqId,
+            requestType: 'purchase',
+            department: 'Store'
+        });
+
+        // Notify original requester if applicable
+        if (reqData.createdBy && reqData.createdBy !== state.userId) {
+            await createInAppNotification({
+                recipientUserId: reqData.createdBy,
+                title: 'PO Delivery Arrived in Store',
+                message: `Items for purchase order #${reqId.substring(0, 8)} have been received into the store.`,
+                type: 'received',
+                requestId: reqId,
+                requestType: 'purchase',
+                department: reqData.department || ''
+            });
+        }
     } catch (error) {
         console.error("Error receiving goods into store:", error);
         showNotification("Failed to receive goods. Check console for details.", true);
@@ -868,6 +1012,8 @@ export async function handleItemFormSubmit(e) {
     const itemId = document.getElementById('item-id').value;
     const itemName = document.querySelector('#item-modal #item-name').value.trim();
     const itemCategory = document.getElementById('item-category').value;
+    const itemUnit = document.getElementById('item-unit')?.value || 'Each';
+    const itemPackageSize = Number(document.getElementById('item-package-size')?.value) || 1;
     const itemStock = Number(document.getElementById('item-stock').value);
     const itemMin = Number(document.getElementById('item-min').value);
     const itemPrice = Number(document.getElementById('item-price').value);
@@ -877,7 +1023,15 @@ export async function handleItemFormSubmit(e) {
         return;
     }
 
-    const itemData = { name: itemName, category: itemCategory, stock: itemStock, min: itemMin, price: itemPrice };
+    const itemData = {
+        name: itemName,
+        category: itemCategory,
+        unit: itemUnit,
+        packageSize: itemPackageSize,
+        stock: itemStock,
+        min: itemMin,
+        price: itemPrice
+    };
 
     showLoadingOverlay();
     try {
@@ -1478,4 +1632,58 @@ export function handleResetRolePermissions() {
             hideLoadingOverlay();
         }
     });
+}
+
+// ============================================================================
+// Notification Actions
+// ============================================================================
+
+/**
+ * Marks all notifications visible to the current user as read.
+ */
+export async function handleMarkAllNotificationsRead() {
+    if (!state.userId) return;
+    try {
+        const unreadNotifs = (state.notificationsCache || []).filter(n => {
+            const isTarget = n.recipientRole === 'All' ||
+                n.recipientRole === state.userRole ||
+                n.recipientUserId === state.userId ||
+                state.userRole === 'System Administrator';
+            const isRead = Array.isArray(n.readBy) && n.readBy.includes(state.userId);
+            return isTarget && !isRead;
+        });
+
+        for (const notif of unreadNotifs) {
+            await updateDoc(doc(state.db, 'notifications', notif.id), {
+                readBy: arrayUnion(state.userId)
+            });
+        }
+        showNotification("All notifications marked as read.");
+    } catch (err) {
+        console.error("Error marking notifications as read:", err);
+    }
+}
+
+/**
+ * Handles clicking a notification: marks it read and navigates to the relevant view.
+ */
+export async function handleNotificationClick(notifId, requestId) {
+    if (!state.userId || !notifId) return;
+    try {
+        await updateDoc(doc(state.db, 'notifications', notifId), {
+            readBy: arrayUnion(state.userId)
+        });
+    } catch (e) {
+        console.warn("Could not mark notification read:", e);
+    }
+
+    if (requestId) {
+        if (state.userRole === 'General Manager' || state.userRole === 'System Administrator') {
+            showSection('approvals');
+        } else if (state.userRole === 'Storekeeper') {
+            showSection('inventory');
+        } else {
+            showSection('my-requests');
+        }
+    }
 }

@@ -11,7 +11,8 @@ import {
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 import {
     getFirestore, doc, collection, addDoc, setDoc, updateDoc, deleteDoc,
-    onSnapshot, query, where, serverTimestamp, orderBy, getDoc, getDocs
+    onSnapshot, query, where, serverTimestamp, orderBy, getDoc, getDocs,
+    arrayUnion, limit
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
 import { firebaseConfig } from './config.js';
@@ -33,5 +34,6 @@ export {
     signInWithEmailAndPassword, createUserWithEmailAndPassword,
     onAuthStateChanged, signOut, sendPasswordResetEmail,
     doc, collection, addDoc, setDoc, updateDoc, deleteDoc,
-    onSnapshot, query, where, serverTimestamp, orderBy, getDoc, getDocs
+    onSnapshot, query, where, serverTimestamp, orderBy, getDoc, getDocs,
+    arrayUnion, limit
 };

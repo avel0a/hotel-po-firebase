@@ -111,9 +111,9 @@
                         <li class="mb-2"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="dashboard"><i class="fas fa-tachometer-alt mr-2 w-5"></i> Dashboard</a></li>
                         <li class="mb-2"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="new-request"><i class="fas fa-plus-circle mr-2 w-5"></i> New Request</a></li>
                         <li class="mb-2"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="my-requests"><i class="fas fa-list mr-2 w-5"></i> My Requests</a></li>
-                        <li class="mb-2 requires-role" data-role="General Manager"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="approvals"><i class="fas fa-check-circle mr-2 w-5"></i> Approvals</a></li>
+                        <li class="mb-2 requires-role" data-role="General Manager, System Administrator"><a href="#" class="nav-link flex items-center justify-between p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="approvals"><span><i class="fas fa-check-circle mr-2 w-5"></i> Approvals</span><span id="sidebar-approvals-badge" class="px-2 py-0.5 text-xs bg-amber-400 text-gray-900 rounded-full font-bold hidden">0</span></a></li>
                         <li class="mb-2 requires-role" data-role="General Manager, System Administrator"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="budgeting"><i class="fas fa-coins mr-2 w-5"></i> Budgeting</a></li>
-                        <li class="mb-2 requires-role" data-role="System Administrator, Store Keeper, Purchasing"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="inventory"><i class="fas fa-boxes mr-2 w-5"></i> Inventory & Store</a></li>
+                        <li class="mb-2 requires-role" data-role="System Administrator, Store Keeper, Purchasing"><a href="#" class="nav-link flex items-center justify-between p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="inventory"><span><i class="fas fa-boxes mr-2 w-5"></i> Inventory & Store</span><span id="sidebar-store-badge" class="px-2 py-0.5 text-xs bg-emerald-400 text-gray-900 rounded-full font-bold hidden">0</span></a></li>
                         <li class="mb-2 requires-role" data-role="General Manager, System Administrator, Purchasing, Store Keeper"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="reports"><i class="fas fa-chart-pie mr-2 w-5"></i> Reports</a></li>
                         <li class="mb-2 requires-role" data-role="System Administrator"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="user-management"><i class="fas fa-users-cog mr-2 w-5"></i> User Management</a></li>
                         <li class="mb-2 requires-role" data-role="System Administrator"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="settings"><i class="fas fa-sliders-h mr-2 w-5"></i> Settings & Roles</a></li>
@@ -138,7 +138,28 @@
                         <button id="mobile-menu-open" class="md:hidden mr-4 p-2"><i class="fas fa-bars"></i></button>
                         <h2 id="page-title" class="text-xl font-semibold">Dashboard</h2>
                     </div>
-                    <div class="flex items-center space-x-4">
+                    <div class="flex items-center space-x-3">
+                        <!-- Notification Bell & Dropdown -->
+                        <div class="relative">
+                            <button id="notification-bell-btn" type="button" class="p-2 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors relative focus:outline-none" aria-label="Notifications" title="Notifications">
+                                <i class="fas fa-bell text-lg"></i>
+                                <span id="notification-badge" class="absolute -top-1 -right-1 px-1.5 py-0.2 min-w-[18px] text-[10px] font-bold bg-rose-600 text-white rounded-full flex items-center justify-center hidden">0</span>
+                            </button>
+                            <!-- Notification Dropdown Panel -->
+                            <div id="notification-dropdown" class="absolute right-0 mt-2 w-80 md:w-96 bg-white dark:bg-gray-800 rounded-xl shadow-2xl py-2 z-50 border border-gray-200 dark:border-gray-700 hidden opacity-0 transform scale-95 transition-all duration-200">
+                                <div class="px-4 py-2.5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750 rounded-t-xl">
+                                    <div class="flex items-center space-x-2">
+                                        <i class="fas fa-bell text-hotel-primary dark:text-hotel-accent text-sm"></i>
+                                        <span class="font-bold text-sm text-gray-800 dark:text-gray-100">Notifications</span>
+                                    </div>
+                                    <button type="button" id="mark-all-read-btn" class="text-xs text-hotel-primary hover:text-hotel-secondary dark:text-hotel-accent font-semibold transition-colors">Mark all read</button>
+                                </div>
+                                <div id="notifications-list" class="max-h-80 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700/60">
+                                    <div class="p-6 text-center text-xs text-gray-400">No new notifications.</div>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- Dark Mode Toggle -->
                         <button id="theme-toggle" class="p-2 rounded-full bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors duration-300">
                             <i class="fas fa-moon hidden dark:inline"></i>
@@ -320,7 +341,15 @@
                             <div class="mb-6"><label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Notes</label><textarea id="req-notes" class="w-full p-2 border border-gray-300 rounded-md focus:ring-hotel-accent focus:border-hotel-accent transition-colors duration-300" rows="3" placeholder="Any additional information..."></textarea></div>
                             <div class="mb-6">
                                 <h3 class="font-medium mb-4 text-gray-800 dark:text-gray-200">Items Requested</h3>
-                                <div id="items-container" class="space-y-4"></div>
+                                <div class="hidden md:grid grid-cols-12 gap-3 pb-2 text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700 px-2">
+                                    <div class="col-span-12 md:col-span-4">Item Name</div>
+                                    <div class="col-span-4 md:col-span-2 text-center">Quantity</div>
+                                    <div class="col-span-4 md:col-span-2">Unit of Measure</div>
+                                    <div class="col-span-4 md:col-span-2 text-right">Unit Price (Birr)</div>
+                                    <div class="col-span-10 md:col-span-1 text-right">Subtotal</div>
+                                    <div class="col-span-2 md:col-span-1 text-center">Action</div>
+                                </div>
+                                <div id="items-container" class="space-y-3 mt-2"></div>
                                 <div class="flex justify-between items-center mt-4">
                                     <button type="button" id="add-item-btn" class="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"><i class="fas fa-plus mr-2"></i> Add Item</button>
                                     <div class="text-right">

@@ -105,5 +105,11 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       allow write: if isAdminOrGM();
     }
+
+    // notifications: authenticated staff can read, create, and mark read
+    match /notifications/{notificationId} {
+      allow read, create, update: if isAuthenticated();
+      allow delete: if isAdminOrGM();
+    }
   }
 }

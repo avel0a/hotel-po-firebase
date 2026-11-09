@@ -24,6 +24,7 @@ const state = {
     budgetsCache: [],
     stockMovementsCache: [],
     departmentsCache: [],
+    notificationsCache: [],
     rolePermissions: {},
 
     // Chart.js instances (destroyed and recreated on data change)

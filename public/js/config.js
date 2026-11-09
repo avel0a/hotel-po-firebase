@@ -40,8 +40,26 @@ export const REQUISITION_STATUSES = ['Pending', 'Approved', 'Partially Issued', 
 /** Flow B: Purchase Order lifecycle statuses */
 export const PURCHASE_STATUSES = ['Pending', 'Approved', 'Ordered', 'Partially Received', 'Received', 'Rejected'];
 
-/** Measurement units for requested items */
-export const UNITS = ['Each', 'Box', 'Kg', 'Liter', 'Set'];
+/** Measurement units for requested items and inventory */
+export const UNITS = ['Kg', 'Liter', 'Each', 'Box', 'Bottle', 'Bag', 'Pack', 'Roll', 'Can', 'Set', 'Carton'];
+
+/**
+ * Default package conversion factors if not explicitly specified on the item.
+ * E.g., when ordering 1 Box or Bag of an item whose base unit is Kg, Each, or Liter.
+ */
+export const DEFAULT_UNIT_MULTIPLIERS = {
+    'Box': 10,
+    'Bag': 25,
+    'Pack': 12,
+    'Carton': 24,
+    'Set': 1,
+    'Each': 1,
+    'Kg': 1,
+    'Liter': 1,
+    'Bottle': 1,
+    'Roll': 1,
+    'Can': 1
+};
 
 /** Request priority levels */
 export const PRIORITIES = ['Normal', 'High', 'Urgent'];

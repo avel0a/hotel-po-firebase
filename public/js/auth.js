@@ -6,7 +6,7 @@
 import state from './state.js';
 import {
     initializeFirebaseApp, onAuthStateChanged, signOut,
-    doc, collection, onSnapshot, query, where, orderBy, getDoc, setDoc, serverTimestamp
+    doc, collection, onSnapshot, query, where, orderBy, getDoc, setDoc, serverTimestamp, limit
 } from './firebase.js';
 import {
     showLoadingOverlay, hideLoadingOverlay, showNotification,
@@ -15,7 +15,8 @@ import {
     renderMyRequests, renderApprovals, renderInventory,
     renderBudgets, renderUsersTable, populateItemNameDatalist,
     populateReportFilters, applyReportFilters, renderStockMovements,
-    refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix
+    refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix,
+    renderNotificationBell, updateSidebarBadges
 } from './ui.js';
 
 /**
@@ -127,6 +128,7 @@ function attachFirestoreListeners() {
         updateStats(state.allRequestsCache, null);
         renderDashboardCharts(state.allRequestsCache);
         applyReportFilters();
+        updateSidebarBadges();
     }, error => {
         console.error("Error listening to requests:", error);
         showNotification("Error fetching data. A database index might be required. Check console (F12) for details.", true);
@@ -188,4 +190,17 @@ function attachFirestoreListeners() {
         renderPermissionsMatrix();
     }, error => console.error("Error listening to role permissions:", error));
     state.unsubscribers.push(permUnsub);
+
+    // In-App Notifications (latest 40 notifications)
+    const notifsQuery = query(
+        collection(state.db, 'notifications'),
+        orderBy('createdAt', 'desc'),
+        limit(40)
+    );
+    const notifsUnsub = onSnapshot(notifsQuery, (snapshot) => {
+        state.notificationsCache = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        renderNotificationBell();
+        updateSidebarBadges();
+    }, error => console.error("Error listening to notifications:", error));
+    state.unsubscribers.push(notifsUnsub);
 }

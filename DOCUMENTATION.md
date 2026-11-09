@@ -201,6 +201,8 @@ The system provides 5 standard roles configured in [`public/js/config.js`](publi
 | :--- | :--- | :--- |
 | `name` | string | Item name (unique key) |
 | `category` | string | Department or item classification |
+| `unit` | string | Base measurement unit (`Kg`, `Liter`, `Each`, `Bottle`, `Box`, `Bag`, etc.) |
+| `packageSize` | number | Base units per package (e.g. 25 for 25 Kg/bag, 24 for 24 bottles/carton) |
 | `stock` | number | Current physical units on hand in store |
 | `min` | number | Minimum safety stock threshold |
 | `price` | number | Current unit valuation (weighted average cost) |
@@ -235,6 +237,20 @@ The system provides 5 standard roles configured in [`public/js/config.js`](publi
 ### 4.5 Collection: `settings` (`settings/permissions`)
 * Contains a single document where keys are role names (e.g., `'Storekeeper'`, `'Purchasing'`) and values are arrays of granted permission strings.
 
+### 4.6 Collection: `notifications`
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `recipientRole` | string | Target role (`'General Manager'`, `'Storekeeper'`, `'Purchasing'`, or `'All'`) |
+| `recipientUserId` | string | Target user UID (or null for role broadcast) |
+| `title` | string | Alert headline |
+| `message` | string | Notification detail |
+| `type` | string | Event type: `'new_request'`, `'approved'`, `'rejected'`, `'ordered'`, `'issued'`, `'received'` |
+| `requestId` | string | Associated request document ID |
+| `requestType` | string | `'requisition'` or `'purchase'` |
+| `department` | string | Associated department |
+| `readBy` | array | Array of user UIDs who have marked this notification read |
+| `createdAt` | timestamp | Server timestamp |
+
 ---
 
 ## 5. Feature Walkthrough
@@ -251,7 +267,10 @@ The system provides 5 standard roles configured in [`public/js/config.js`](publi
   * **Department Requisition (Stock Out):** Supplies needed for internal departmental use.
   * **Purchase Order (Stock In):** Replenishing store warehouse stock from external vendors.
 * **Auto Identity:** Detects signed-in user and department automatically.
-* **Autocomplete & Auto-Pricing:** Typing an item name autocompletes from inventory and pre-populates standard unit price.
+* **Autocomplete & Auto-Pricing:** Typing an item name autocompletes from inventory, pre-populating base unit and unit price.
+* **Dynamic Package Pricing & Unit Conversions:** Selecting packaging units (e.g., `Box`, `Bag`, `Carton`) automatically scales the unit price by the item's configured `packageSize` (e.g. 25 kg per bag of sugar) or default conversion multiplier.
+* **Editable Unit Price Column:** The unit price is displayed in an editable number input on each item row, allowing staff to adjust prices or input negotiated vendor rates directly before submission.
+* **Live Calculations:** Subtotal (`quantity * unitPrice`) and estimated total cost recalculate immediately on quantity, unit, or price change.
 
 ### 5.3 Tabbed Requests View & Action Buttons
 * **Filter Pills with Live Counts:**
@@ -299,6 +318,17 @@ The system provides 5 standard roles configured in [`public/js/config.js`](publi
 ### 5.11 Hotel Settings: Departments & Permissions
 * **Department Management:** Add or delete hotel departments dynamically with instant propagation.
 * **Role Permissions Matrix:** Checkbox grid configuring capabilities per role with permanent fail-safe Admin protection.
+
+### 5.12 Real-Time In-App Notification System & Sidebar Badges
+* **Notification Bell:** Header bell icon with an unread badge counter and real-time dropdown feed.
+* **Automated Workflow Notifications:**
+  * **New Requests:** Instantly alerts General Manager / Approval Manager.
+  * **Approved Requisitions:** Alerts Storekeeper to dispense items.
+  * **Approved Purchase Orders:** Alerts Purchasing team to place external orders.
+  * **Ordered POs:** Alerts Storekeeper that goods have been ordered and will arrive.
+  * **Issued / Received Goods:** Alerts requesting department staff and purchasing.
+* **Interactive Controls:** Mark all as read, click-to-route directly to the relevant request.
+* **Sidebar Activity Badges:** Real-time numerical badges indicating pending approvals for General Manager and pending warehouse actions (issuance/receiving) for Storekeeper.
 
 ---
 

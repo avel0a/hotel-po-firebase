@@ -20,7 +20,8 @@ import {
     showReceiveGoodsModal, hideReceiveGoodsModal,
     showStockLogModal, hideStockLogModal,
     showStockReconciliationModal, hideStockReconciliationModal,
-    refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix
+    refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix,
+    handleItemRowUnitChange, renderNotificationBell, updateSidebarBadges, toggleNotificationDropdown
 } from './ui.js';
 import {
     handleLogin, handleLogout, handleCreateUser,
@@ -30,7 +31,7 @@ import {
     handleMarkAsOrdered, handleIssueRequisitionSubmit, handleReceiveGoodsSubmit,
     handleSetBudget, downloadReportPdf, downloadReportCsv, handleQuickOrderLowStock,
     handleAddDepartment, handleDeleteDepartment, handleSaveRolePermissions, handleResetRolePermissions,
-    runOneTimeRequestAudit
+    runOneTimeRequestAudit, handleMarkAllNotificationsRead, handleNotificationClick
 } from './actions.js';
 import { initializeFirebase } from './auth.js';
 
@@ -103,10 +104,34 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('profile-logout-btn').addEventListener('click', handleLogout);
 
+    // --- Notification Bell & Dropdown ---
+    const bellBtn = document.getElementById('notification-bell-btn');
+    if (bellBtn) {
+        bellBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleNotificationDropdown();
+        });
+    }
+
+    const markAllReadBtn = document.getElementById('mark-all-read-btn');
+    if (markAllReadBtn) {
+        markAllReadBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            handleMarkAllNotificationsRead();
+        });
+    }
+
     document.addEventListener('click', (e) => {
         if (!profileMenu.classList.contains('hidden') && !profileMenuButton.contains(e.target) && !profileMenu.contains(e.target)) {
             profileMenu.classList.add('opacity-0', 'scale-95');
             setTimeout(() => { profileMenu.classList.add('hidden'); }, 200);
+        }
+        const notifDropdown = document.getElementById('notification-dropdown');
+        const notifBell = document.getElementById('notification-bell-btn');
+        if (notifDropdown && !notifDropdown.classList.contains('hidden')) {
+            if (!notifDropdown.contains(e.target) && !notifBell?.contains(e.target)) {
+                toggleNotificationDropdown(false);
+            }
         }
     });
 
@@ -223,27 +248,72 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // --- Item Cost Calculation (event delegation) ---
-    document.getElementById('items-container').addEventListener('input', e => {
-        const itemNameInput = e.target.closest('.item-name');
-        if (itemNameInput) {
-            const row = itemNameInput.closest('.item-row');
-            const priceInput = row.querySelector('.item-price');
-            const selectedItem = state.inventoryItemsCache.find(item => item.name.toLowerCase() === itemNameInput.value.toLowerCase());
-            priceInput.value = selectedItem ? (selectedItem.price || 0) : 0;
-            updateItemSubtotal(row);
-            return;
-        }
-        const itemQuantityInput = e.target.closest('.item-quantity');
-        if (itemQuantityInput) {
-            const row = itemQuantityInput.closest('.item-row');
-            updateItemSubtotal(row);
-            return;
-        }
-    });
+    // --- Item Cost Calculation & Dynamic Unit Scaling (event delegation) ---
+    const itemsContainer = document.getElementById('items-container');
+    if (itemsContainer) {
+        itemsContainer.addEventListener('input', e => {
+            const itemNameInput = e.target.closest('.item-name');
+            if (itemNameInput) {
+                const row = itemNameInput.closest('.item-row');
+                const priceInput = row.querySelector('.item-price');
+                const unitSelect = row.querySelector('.item-unit');
+                const selectedItem = state.inventoryItemsCache.find(item => item.name.toLowerCase() === itemNameInput.value.toLowerCase());
+                if (selectedItem) {
+                    row.dataset.basePrice = selectedItem.price || 0;
+                    row.dataset.baseUnit = selectedItem.unit || 'Each';
+                    row.dataset.packageSize = selectedItem.packageSize || 1;
+                    if (unitSelect && selectedItem.unit) {
+                        unitSelect.value = selectedItem.unit;
+                    }
+                    if (priceInput) {
+                        priceInput.value = Number(selectedItem.price || 0).toFixed(2);
+                    }
+                } else {
+                    row.dataset.basePrice = 0;
+                    row.dataset.baseUnit = 'Each';
+                    row.dataset.packageSize = 1;
+                }
+                updateItemSubtotal(row);
+                return;
+            }
+
+            const itemPriceInput = e.target.closest('.item-price');
+            if (itemPriceInput) {
+                const row = itemPriceInput.closest('.item-row');
+                updateItemSubtotal(row);
+                return;
+            }
+
+            const itemQuantityInput = e.target.closest('.item-quantity');
+            if (itemQuantityInput) {
+                const row = itemQuantityInput.closest('.item-row');
+                updateItemSubtotal(row);
+                return;
+            }
+        });
+
+        itemsContainer.addEventListener('change', e => {
+            const unitSelect = e.target.closest('.item-unit');
+            if (unitSelect) {
+                const row = unitSelect.closest('.item-row');
+                handleItemRowUnitChange(row);
+                return;
+            }
+        });
+    }
 
     // --- Centralized Click Delegation (dynamic buttons) ---
     document.body.addEventListener('click', e => {
+        // Notification item click (mark as read & view request)
+        const notifItem = e.target.closest('.notification-item');
+        if (notifItem) {
+            const notifId = notifItem.dataset.id;
+            const reqId = notifItem.dataset.requestId;
+            toggleNotificationDropdown(false);
+            handleNotificationClick(notifId, reqId);
+            return;
+        }
+
         // Navigation links
         const navLink = e.target.closest('.nav-link');
         if (navLink && navLink.dataset.section) {
