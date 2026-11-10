@@ -4,20 +4,21 @@
  */
 
 import state from './state.js';
+import { normalizeRole } from './config.js';
 import {
     initializeFirebaseApp, onAuthStateChanged, signOut,
     doc, collection, onSnapshot, query, where, orderBy, getDoc, setDoc, serverTimestamp, limit
 } from './firebase.js';
 import {
     showLoadingOverlay, hideLoadingOverlay, showNotification,
-    updateUIVisibility, showSection,
+    updateUIVisibility, showSection, hasPermission,
     renderDashboard, renderDashboardCharts, updateStats,
     renderMyRequests, renderApprovals, renderInventory,
     renderBudgets, renderUsersTable, populateItemNameDatalist,
     populateReportFilters, applyReportFilters, renderStockMovements,
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix,
     renderNotificationBell, updateSidebarBadges, renderStoreOperations
-} from './ui.js?v=2.5';
+} from './ui.js?v=2.6';
 
 /**
  * Initializes Firebase and sets up auth listener.
@@ -181,11 +182,12 @@ function attachFirestoreListeners() {
     }, error => console.error("Error listening to stock movements:", error));
     state.unsubscribers.push(movementsUnsub);
 
-    // Users (only for privileged roles)
-    if (state.userRole === 'System Administrator' || state.userRole === 'General Manager' || state.userRole === 'Purchasing' || state.userRole === 'Store Keeper') {
+    // Users (for privileged roles and anyone with manage_users or view_reports)
+    const normRole = normalizeRole(state.userRole);
+    if (normRole === 'System Administrator' || normRole === 'General Manager' || normRole === 'Purchasing' || normRole === 'Storekeeper' || hasPermission(state.userRole, 'manage_users')) {
         const usersUnsub = onSnapshot(collection(state.db, 'users'), (snapshot) => {
             state.allUsersCache = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-            if (state.userRole === 'System Administrator') {
+            if (hasPermission(state.userRole, 'manage_users')) {
                 const searchVal = document.getElementById('users-search')?.value || '';
                 renderUsersTable(state.allUsersCache, searchVal);
             }

@@ -142,3 +142,11 @@ export function isPurchaseRequest(req) {
            req.department === 'Purchasing';
 }
 
+/**
+ * Normalizes legacy role aliases (e.g., 'Store Keeper' -> 'Storekeeper').
+ */
+export function normalizeRole(role) {
+    if (!role) return 'User';
+    return role === 'Store Keeper' ? 'Storekeeper' : role;
+}
+

@@ -5,7 +5,7 @@
 
 import state from './state.js';
 import { doc, getDoc } from './firebase.js';
-import { DEPARTMENTS, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, UNITS, DEFAULT_UNIT_MULTIPLIERS, getUnitConversionFactor, isPurchaseRequest } from './config.js';
+import { DEPARTMENTS, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, UNITS, DEFAULT_UNIT_MULTIPLIERS, getUnitConversionFactor, isPurchaseRequest, normalizeRole } from './config.js';
 
 // ============================================================================
 // Loading Overlay
@@ -92,10 +92,14 @@ export function getStatusBadge(status) {
  * or falling back to DEFAULT_ROLE_PERMISSIONS.
  */
 export function hasPermission(role, permissionName) {
-    if (role === 'System Administrator') return true;
-    const permissions = state.rolePermissions && state.rolePermissions[role]
-        ? state.rolePermissions[role]
-        : (DEFAULT_ROLE_PERMISSIONS[role] || []);
+    const norm = normalizeRole(role);
+    if (norm === 'System Administrator') return true;
+    const altRole = norm === 'Storekeeper' ? 'Store Keeper' : null;
+    const permissions = (state.rolePermissions && state.rolePermissions[norm])
+        ? state.rolePermissions[norm]
+        : (altRole && state.rolePermissions && state.rolePermissions[altRole])
+            ? state.rolePermissions[altRole]
+            : (DEFAULT_ROLE_PERMISSIONS[norm] || (altRole ? DEFAULT_ROLE_PERMISSIONS[altRole] : []) || []);
     return permissions.includes(permissionName);
 }
 
@@ -182,13 +186,14 @@ export function updateUIVisibility() {
         }
 
         let isVisible = false;
-        if (state.userRole === 'System Administrator') {
+        const normUserRole = normalizeRole(state.userRole);
+        if (normUserRole === 'System Administrator') {
             isVisible = true;
         } else if (el.dataset.permission) {
             isVisible = hasPermission(state.userRole, el.dataset.permission);
         } else if (el.dataset.role) {
-            const requiredRoles = el.dataset.role.split(',').map(r => r.trim());
-            isVisible = requiredRoles.includes(state.userRole);
+            const requiredRoles = el.dataset.role.split(',').map(r => normalizeRole(r.trim()));
+            isVisible = requiredRoles.includes(normUserRole);
         }
 
         if (isVisible) {
@@ -270,7 +275,7 @@ export function renderPermissionsMatrix() {
     const tbody = document.getElementById('permissions-matrix-body');
     if (!tbody) return;
 
-    const roles = ['User', 'Purchasing', 'Store Keeper', 'General Manager', 'System Administrator'];
+    const roles = ['User', 'Purchasing', 'Storekeeper', 'General Manager', 'System Administrator'];
 
     tbody.innerHTML = AVAILABLE_PERMISSIONS.map(perm => {
         const cellsHtml = roles.map(role => {
@@ -343,7 +348,7 @@ export function showSection(sectionId) {
         const reqTypePo = document.getElementById('req-type-po');
         const reqTypeReq = document.getElementById('req-type-requisition');
         if (reqTypePo && reqTypeReq) {
-            if (state.userRole === 'Purchasing' || state.userRole === 'Store Keeper' || userDept === 'Store' || userDept === 'Purchasing') {
+            if (state.userRole === 'Purchasing' || normalizeRole(state.userRole) === 'Storekeeper' || userDept === 'Store' || userDept === 'Purchasing') {
                 reqTypePo.checked = true;
                 reqTypeReq.checked = false;
             } else {
@@ -2418,13 +2423,13 @@ export function renderBudgets(budgets, requests) {
 // ============================================================================
 
 function getRoleBadge(role) {
-    switch (role) {
+    switch (normalizeRole(role)) {
         case 'System Administrator':
             return '<span class="px-2.5 py-1 text-xs font-semibold rounded-full bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-200 inline-flex items-center"><i class="fas fa-shield-alt mr-1"></i>Admin</span>';
         case 'General Manager':
             return '<span class="px-2.5 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-200 inline-flex items-center"><i class="fas fa-user-tie mr-1"></i>GM</span>';
-        case 'Store Keeper':
-            return '<span class="px-2.5 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-200 inline-flex items-center"><i class="fas fa-warehouse mr-1"></i>Store Keeper</span>';
+        case 'Storekeeper':
+            return '<span class="px-2.5 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-200 inline-flex items-center"><i class="fas fa-warehouse mr-1"></i>Storekeeper</span>';
         case 'Purchasing':
             return '<span class="px-2.5 py-1 text-xs font-semibold rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 inline-flex items-center"><i class="fas fa-shopping-cart mr-1"></i>Purchasing</span>';
         default:
@@ -2436,7 +2441,8 @@ export function showUserModal(user) {
     const modal = document.getElementById('user-modal');
     if (!modal) return;
 
-    const roleOptions = ROLES.map(r => `<option value="${r}" ${r === user.role ? 'selected' : ''}>${r}</option>`).join('');
+    const normalizedUserRole = normalizeRole(user.role);
+    const roleOptions = ROLES.map(r => `<option value="${r}" ${r === normalizedUserRole ? 'selected' : ''}>${r}</option>`).join('');
     const deptOptions = getActiveDepartments().map(d => `<option value="${d}" ${d === user.department ? 'selected' : ''}>${d}</option>`).join('');
     const userStatus = user.status || 'Active';
 
@@ -2979,7 +2985,7 @@ export function renderNotificationBell() {
         if (!state.userId) return false;
         if (n.recipientUserId && n.recipientUserId === state.userId) return true;
         if (n.recipientRole === 'All') return true;
-        if (n.recipientRole && n.recipientRole === state.userRole) return true;
+        if (n.recipientRole && normalizeRole(n.recipientRole) === normalizeRole(state.userRole)) return true;
         if (state.userRole === 'System Administrator') return true;
         return false;
     });
