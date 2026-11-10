@@ -526,7 +526,6 @@ export function showItemModal(item = null) {
     }
     modal.classList.remove('hidden', 'opacity-0', 'invisible');
 }
-}
 
 export function hideItemModal() {
     const modal = document.getElementById('item-modal');

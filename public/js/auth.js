@@ -17,7 +17,7 @@ import {
     populateReportFilters, applyReportFilters, renderStockMovements,
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix,
     renderNotificationBell, updateSidebarBadges, renderStoreOperations
-} from './ui.js';
+} from './ui.js?v=2.3';
 
 /**
  * Initializes Firebase and sets up auth listener.
@@ -40,13 +40,21 @@ export async function initializeFirebase() {
 function setupAuthListener() {
     onAuthStateChanged(state.auth, async (user) => {
         if (user) {
-            await loadUserProfile(user);
-            document.getElementById('login-page').style.display = 'none';
-            document.getElementById('app-container').classList.remove('hidden');
+            try {
+                await loadUserProfile(user);
+            } catch (err) {
+                console.error("Error loading user profile:", err);
+            }
+            const loginPage = document.getElementById('login-page');
+            const appContainer = document.getElementById('app-container');
+            if (loginPage) loginPage.style.display = 'none';
+            if (appContainer) appContainer.classList.remove('hidden');
             hideLoadingOverlay();
         } else {
-            document.getElementById('login-page').style.display = 'flex';
-            document.getElementById('app-container').classList.add('hidden');
+            const loginPage = document.getElementById('login-page');
+            const appContainer = document.getElementById('app-container');
+            if (loginPage) loginPage.style.display = 'flex';
+            if (appContainer) appContainer.classList.add('hidden');
             state.unsubscribers.forEach(unsub => unsub());
             state.unsubscribers = [];
             hideLoadingOverlay();
@@ -70,29 +78,43 @@ async function loadUserProfile(user) {
         console.warn("Could not preload role permissions:", e);
     }
 
-    const userRef = doc(state.db, `users/${state.userId}`);
-    const userDoc = await getDoc(userRef);
-    if (userDoc.exists()) {
-        const userData = userDoc.data();
-        if (userData.status === 'Suspended') {
-            showNotification("Your account has been suspended. Please contact the administrator.", true);
-            await signOut(state.auth);
-            return;
+    try {
+        const userRef = doc(state.db, `users/${state.userId}`);
+        const userDoc = await getDoc(userRef);
+        if (userDoc.exists()) {
+            const userData = userDoc.data();
+            if (userData.status === 'Suspended') {
+                showNotification("Your account has been suspended. Please contact the administrator.", true);
+                await signOut(state.auth);
+                return;
+            }
+            state.userRole = userData.role;
+            state.userDepartment = userData.department;
+            const emailDisp = document.getElementById('user-email-display');
+            const nameDisp = document.getElementById('user-name-display');
+            const roleDisp = document.getElementById('user-role-display');
+            const deptDisp = document.getElementById('user-department-display');
+            if (emailDisp) emailDisp.textContent = user.email;
+            if (nameDisp) nameDisp.textContent = user.email;
+            if (roleDisp) roleDisp.textContent = state.userRole;
+            if (deptDisp) deptDisp.textContent = state.userDepartment || 'N/A';
+            updateUIVisibility();
+            attachFirestoreListeners();
+        } else {
+            // New user — create profile with defaults
+            state.userRole = 'User';
+            state.userDepartment = 'Other';
+            await setDoc(userRef, { email: user.email, role: state.userRole, department: state.userDepartment, createdAt: serverTimestamp() });
+            await loadUserProfile(user);
         }
-        state.userRole = userData.role;
-        state.userDepartment = userData.department;
-        document.getElementById('user-email-display').textContent = user.email;
-        document.getElementById('user-name-display').textContent = user.email;
-        document.getElementById('user-role-display').textContent = state.userRole;
-        document.getElementById('user-department-display').textContent = state.userDepartment || 'N/A';
+    } catch (err) {
+        console.error("Error loading user profile document:", err);
+        const emailDisp = document.getElementById('user-email-display');
+        const nameDisp = document.getElementById('user-name-display');
+        if (emailDisp) emailDisp.textContent = user.email;
+        if (nameDisp) nameDisp.textContent = user.email;
         updateUIVisibility();
         attachFirestoreListeners();
-    } else {
-        // New user — create profile with defaults
-        state.userRole = 'User';
-        state.userDepartment = 'Other';
-        await setDoc(userRef, { email: user.email, role: state.userRole, department: state.userDepartment, createdAt: serverTimestamp() });
-        loadUserProfile(user);
     }
 }
 
