@@ -15,7 +15,10 @@ import {
     showLoadingOverlay, hideLoadingOverlay, showNotification,
     showSection, showConfirmModal, addRequestItemRow, updateTotalCost,
     hideItemModal, showUserModal, hideUserModal, hideIssueModal, hideReceiveModal,
-    hideIssueRequisitionModal, hideOrderPOModal, hideReceiveGoodsModal,
+    showIssueRequisitionModal, hideIssueRequisitionModal,
+    showOrderPOModal, hideOrderPOModal,
+    showReceiveGoodsModal, hideReceiveGoodsModal,
+    showRequestDetailsModal, renderReconciliationContent,
     hasPermission, getActiveDepartments, renderPermissionsMatrix, updateUIVisibility
 } from './ui.js';
 
@@ -1777,7 +1780,7 @@ export async function handleMarkAllNotificationsRead() {
 }
 
 /**
- * Handles clicking a notification: marks it read and navigates to the relevant view.
+ * Handles clicking a notification: marks it read and navigates directly to the relevant action or request.
  */
 export async function handleNotificationClick(notifId, requestId) {
     if (!state.userId || !notifId) return;
@@ -1790,12 +1793,123 @@ export async function handleNotificationClick(notifId, requestId) {
     }
 
     if (requestId) {
-        if (state.userRole === 'General Manager' || state.userRole === 'System Administrator') {
+        const req = (state.allRequestsCache || []).find(r => r.id === requestId);
+        if (req) {
+            const isRequisition = req.requestType === 'requisition' || req.requestType === 'Requisition';
+            const isPO = req.requestType === 'purchase' || req.requestType === 'Purchase Order';
+            const isStoreStaff = state.userRole === 'Storekeeper' || state.userRole === 'Store Keeper' || state.userRole === 'System Administrator';
+            const isPurchasingStaff = state.userRole === 'Purchasing' || state.userRole === 'System Administrator';
+            const isGMStaff = state.userRole === 'General Manager' || state.userRole === 'System Administrator';
+
+            // 1. If Requisition is Approved or Partially Issued -> Open Issue Modal for Storekeeper!
+            if (isRequisition && (req.status === 'Approved' || req.status === 'Partially Issued') && isStoreStaff) {
+                showIssueRequisitionModal(req);
+                return;
+            }
+
+            // 2. If PO is Ordered or Partially Received -> Open Receive Goods Modal for Storekeeper!
+            if (isPO && (req.status === 'Ordered' || req.status === 'Partially Received') && isStoreStaff) {
+                showReceiveGoodsModal(req);
+                return;
+            }
+
+            // 3. If PO is Approved -> Open Place Order Modal for Purchasing!
+            if (isPO && req.status === 'Approved' && isPurchasingStaff) {
+                showOrderPOModal(req);
+                return;
+            }
+
+            // 4. If request is Pending and user can approve -> Go to Approvals section!
+            if (req.status === 'Pending' && isGMStaff) {
+                showSection('approvals');
+                return;
+            }
+
+            // 5. Default -> Open full Request Details Modal!
+            showRequestDetailsModal(req);
+            return;
+        }
+
+        // Fallback navigation if request not found in recent memory cache
+        if (state.userRole === 'General Manager') {
             showSection('approvals');
-        } else if (state.userRole === 'Storekeeper') {
+        } else if (state.userRole === 'Storekeeper' || state.userRole === 'Store Keeper') {
             showSection('inventory');
         } else {
             showSection('my-requests');
         }
+    }
+}
+
+/**
+ * Automatically creates opening baseline IN records for inventory items with 0 stock movements.
+ * This resolves pre-existing items that had stock before movement tracking started.
+ */
+export async function handleBaselineOpeningStock(itemId = null) {
+    if (!hasPermission(state.userRole, 'manage_inventory')) {
+        showNotification("You do not have permission to configure inventory baselines.", true);
+        return;
+    }
+
+    const items = state.inventoryItemsCache || [];
+    const movements = state.stockMovementsCache || [];
+
+    const movedKeys = new Set();
+    movements.forEach(m => {
+        if (m.itemId) movedKeys.add(m.itemId);
+        if (m.itemName) movedKeys.add(m.itemName.trim().toLowerCase());
+    });
+
+    let itemsToProcess = [];
+    if (itemId) {
+        const single = items.find(i => i.id === itemId);
+        if (single) itemsToProcess.push(single);
+    } else {
+        itemsToProcess = items.filter(i => {
+            const hasMovements = movedKeys.has(i.id) || movedKeys.has(i.name.trim().toLowerCase());
+            return !hasMovements && Number(i.stock || 0) > 0;
+        });
+    }
+
+    if (itemsToProcess.length === 0) {
+        showNotification("All items already have baseline movement records.");
+        return;
+    }
+
+    showLoadingOverlay();
+    try {
+        let count = 0;
+        for (const it of itemsToProcess) {
+            const stockQty = Number(it.stock || 0);
+            if (stockQty <= 0) continue;
+
+            await addDoc(collection(state.db, 'stock_movements'), {
+                itemId: it.id,
+                itemName: it.name,
+                category: it.category || 'General',
+                type: 'IN',
+                quantity: stockQty,
+                previousStock: 0,
+                newStock: stockQty,
+                unitPrice: Number(it.price || 0),
+                department: 'Store',
+                recipient: 'Store Warehouse Baseline',
+                reason: `Initial Baseline Opening Balance (+${stockQty} ${it.unit || 'units'})`,
+                issuedBy: state.userId,
+                issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
+                timestamp: serverTimestamp()
+            });
+            count++;
+        }
+
+        showNotification(`Successfully baselined ${count} item(s)! Reconciliation is now balanced.`);
+        if (typeof renderReconciliationContent === 'function') {
+            renderReconciliationContent();
+        }
+    } catch (err) {
+        console.error("Error setting baseline opening stock:", err);
+        showNotification("Failed to create opening baseline records.", true);
+    } finally {
+        hideLoadingOverlay();
     }
 }

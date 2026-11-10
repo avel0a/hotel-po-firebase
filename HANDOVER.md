@@ -284,17 +284,53 @@ When editing inventory items via **Inventory & Store > Edit Item**:
    - **Stock Decreases:** Logged as movement type `OUT` with `previousStock ➔ newStock`, quantity changed, authorizing user email, and timestamp.
 2. **Mandatory Audit Reason Field:**
    - The Edit Item modal includes an **Adjustment Reason / Audit Note** field (e.g., physical stock recount, damaged goods written off, recount discrepancy).
-3. **Reconciliation Balancing:**
+3. **Item History Button on Every Row:**
+   - Every inventory item now includes an **Audit History** button (`<i class="fas fa-history"></i>`) that opens the Stock Movement modal pre-filtered specifically for that item, showing its full chronological history of receipts, issuances, and physical adjustments.
+   - The Edit modal also includes a direct link to view the item's complete audit trail.
+4. **Reconciliation Balancing:**
    - Because stock increases count as `IN` and decreases count as `OUT`, the **Stock Reconciliation** formula (`Total IN - Total OUT = System Stock`) remains 100% mathematically balanced and free of unexplained discrepancies.
-4. **Initial Stock & Item Deletion Audit:**
+5. **Initial Stock & Item Deletion Audit:**
    - Adding a new item with opening stock automatically logs an `IN` movement for initial setup.
    - Deleting an inventory item with remaining stock logs a formal write-off `OUT` movement.
-5. **General Manager Notifications:**
+6. **General Manager Notifications:**
    - Any manual stock adjustment immediately triggers an in-app alert to the General Manager detailing the staff member who made the edit, the item, previous stock, new stock, and the recorded reason.
 
 ---
 
-## 11. Full-Screen Responsive Layout Optimization
+## 11. Store Operations Action Center & Notification Routing
+
+1. **Store Operations Queue:**
+   - When Storekeepers or Administrators open **Store / Inventory**, a prominent **Store Operations Queue** appears above the inventory table.
+   - This directly explains the number on the sidebar badge (e.g. `7`), displaying:
+     - **Approved Requisitions to Issue (Stock Down):** with 1-click **"Issue Items"** buttons.
+     - **Ordered POs to Receive (Stock Up):** with 1-click **"Receive Goods"** buttons.
+2. **Smart Notification Deep-Linking:**
+   - Clicking any notification in the bell dropdown automatically routes the user directly to the relevant modal:
+     - Requisition approved ➔ Opens the **Issue Requisition Modal** for Storekeeper.
+     - PO ordered ➔ Opens the **Receive Goods Modal** for Storekeeper.
+     - PO approved ➔ Opens the **Place Order Modal** for Purchasing.
+     - Pending request ➔ Opens **Approvals** for General Manager.
+     - General notification ➔ Opens **Request Details Modal**.
+
+---
+
+## 12. Stock Reconciliation & 1-Click Auto-Baselining
+
+1. **How Reconciliation Works:**
+   - **System Stock:** Physical quantity saved on the item card.
+   - **Computed Stock:** Mathematical result of immutable movements (`Total IN - Total OUT`).
+   - **Variance:** `System Stock - Computed Stock`.
+2. **Pre-Existing Inventory & Baselining:**
+   - Inventory items created before movement tracking had physical stock but 0 movements in the ledger, causing a mathematical mismatch.
+   - The reconciliation screen now clearly flags these items as **"Needs Baseline"**.
+3. **1-Click Auto-Baseline Tool:**
+   - Click **"⚡ Auto-Baseline Opening Stock"** in the reconciliation modal header (or **"Set Baseline"** on any individual item).
+   - The system automatically writes opening baseline `IN` movement entries (`Initial Baseline Opening Balance`) with previousStock 0 and newStock equal to physical quantity.
+   - Reconciliation immediately achieves **100% Balanced** status across all hotel inventory items.
+
+---
+
+## 13. Full-Screen Responsive Layout Optimization
 
 * The Inventory view is fully optimized for standard hotel terminal screens (1366x768, 1440x900, 1080p with Windows 125%/150% scaling) without requiring browser zoom-out:
   - Table cell padding streamlined to `px-3.5 py-2.5` to eliminate excess horizontal space.
@@ -304,7 +340,7 @@ When editing inventory items via **Inventory & Store > Edit Item**:
 
 ---
 
-## 12. Deployment & Routine Maintenance
+## 14. Deployment & Routine Maintenance
 
 ### Deployment Command
 Always use quotes when deploying multiple targets on Windows PowerShell:

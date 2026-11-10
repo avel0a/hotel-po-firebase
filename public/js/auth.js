@@ -16,7 +16,7 @@ import {
     renderBudgets, renderUsersTable, populateItemNameDatalist,
     populateReportFilters, applyReportFilters, renderStockMovements,
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix,
-    renderNotificationBell, updateSidebarBadges
+    renderNotificationBell, updateSidebarBadges, renderStoreOperations
 } from './ui.js';
 
 /**
@@ -129,6 +129,7 @@ function attachFirestoreListeners() {
         renderDashboardCharts(state.allRequestsCache);
         applyReportFilters();
         updateSidebarBadges();
+        renderStoreOperations();
     }, error => {
         console.error("Error listening to requests:", error);
         showNotification("Error fetching data. A database index might be required. Check console (F12) for details.", true);

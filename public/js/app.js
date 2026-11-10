@@ -21,7 +21,8 @@ import {
     showStockLogModal, hideStockLogModal,
     showStockReconciliationModal, hideStockReconciliationModal,
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix,
-    handleItemRowUnitChange, renderNotificationBell, updateSidebarBadges, toggleNotificationDropdown
+    handleItemRowUnitChange, renderNotificationBell, updateSidebarBadges, toggleNotificationDropdown,
+    renderStoreOperations
 } from './ui.js';
 import {
     handleLogin, handleLogout, handleCreateUser,
@@ -31,7 +32,8 @@ import {
     handleMarkAsOrdered, handleIssueRequisitionSubmit, handleReceiveGoodsSubmit,
     handleSetBudget, downloadReportPdf, downloadReportCsv, handleQuickOrderLowStock,
     handleAddDepartment, handleDeleteDepartment, handleSaveRolePermissions, handleResetRolePermissions,
-    runOneTimeRequestAudit, handleMarkAllNotificationsRead, handleNotificationClick
+    runOneTimeRequestAudit, handleMarkAllNotificationsRead, handleNotificationClick,
+    handleBaselineOpeningStock
 } from './actions.js';
 import { initializeFirebase } from './auth.js';
 
@@ -399,6 +401,28 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 showNotification("Item details not found.", true);
             }
+            return;
+        }
+
+        // View item audit trail & movement history
+        const viewHistoryBtn = e.target.closest('.view-item-history-btn');
+        if (viewHistoryBtn) {
+            const itemId = viewHistoryBtn.dataset.id;
+            const item = (state.inventoryItemsCache || []).find(i => i.id === itemId);
+            showStockLogModal(item || null);
+            return;
+        }
+
+        // Auto-baseline opening stock (all items)
+        if (e.target.closest('#recon-auto-baseline-btn')) {
+            handleBaselineOpeningStock();
+            return;
+        }
+
+        // Baseline opening stock (single item)
+        const setSingleBaselineBtn = e.target.closest('.set-single-baseline-btn');
+        if (setSingleBaselineBtn) {
+            handleBaselineOpeningStock(setSingleBaselineBtn.dataset.id);
             return;
         }
 

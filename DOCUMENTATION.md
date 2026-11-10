@@ -293,17 +293,30 @@ The system provides 5 standard roles configured in [`public/js/config.js`](publi
 * **Place Order Modal:** Purchasing enters supplier, quotation number, expected delivery date, and purchasing terms.
 * **Receive PO Goods Modal:** Storekeeper enters actual delivered quantities, actual unit invoice prices, invoice/delivery note number, and "Receive All Remaining" helper.
 
-### 5.6 Inventory Management & Quick Restock
+### 5.6 Inventory Management, Action Center & Quick Restock
+* **Store Operations Queue:** A dedicated action widget at the top of the Inventory view surfaces pending store tasks matching the sidebar badge:
+  - **Approved Requisitions to Issue (Stock Down):** Direct 1-click **"Issue Items"** buttons.
+  - **Ordered POs to Receive (Stock Up):** Direct 1-click **"Receive Goods"** buttons.
 * Complete SKU tracking with real-time stock status (In Stock, Low Stock, Out of Stock).
 * **Full-Screen Responsive Layout:** Table and control elements optimized to fit standard laptop and terminal resolutions (1366x768, 1440x900, 1080p scaled) at 100% zoom without requiring zoom-out.
 * **Manual Stock Adjustments & Full Audit:** When editing an item's stock (increase or decrease), the system automatically captures previous vs. new stock, prompts for an adjustment reason, creates an immutable audit record in `stock_movements`, and alerts the General Manager.
+* **Per-Item Movement History Button:** Each inventory row has an audit trail button (`<i class="fas fa-history"></i>`) opening the movement log filtered directly to that SKU.
 * **Initial Stock & Write-Off Tracking:** Opening stock for newly created items is recorded as `IN`, and deleted items with remaining quantities are recorded as write-off `OUT` movements.
 * **"Restock Low Items" 1-Click Button:** Scans for items below `min` and auto-generates a pre-filled Purchase Order.
 * **Ad-Hoc Issue & Receive:** Standalone modals for walk-up staff issuances or direct off-PO vendor deliveries.
 
-### 5.7 Immutable Stock Movement Audit Trail
+### 5.7 Immutable Stock Movement Audit Trail & Reconciliation
 * Accessible via the **Stock Movement Log** button in the Inventory view.
 * Displays chronological history of every `IN` and `OUT` transaction with staff details, quantities, and delivery references.
+* **Stock Reconciliation Report & Auto-Baselining:**
+  - Compares `System Stock` against `Computed Stock` (`Total IN - Total OUT`).
+  - Pre-existing items without historical movements are highlighted as **"Needs Baseline"**.
+  - **⚡ Auto-Baseline Opening Stock:** 1-click tool that creates starting baseline records for pre-existing items, balancing the store to 100%.
+  - Full CSV export of reconciliation results.
+
+### 5.7.1 Smart Notifications & Deep-Linking
+* In-app notification bell dropdown automatically refreshes in real time.
+* Clicking any notification immediately navigates and opens the corresponding action modal (e.g. Issue Requisition modal for Storekeeper, Receive Goods modal for incoming deliveries, Place Order modal for Purchasing, or GM Approvals).
 
 ### 5.8 Department Budget Tracking
 * Set monthly spending caps per department.

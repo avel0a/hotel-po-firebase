@@ -5,7 +5,7 @@
 
 import state from './state.js';
 import { doc, getDoc } from './firebase.js';
-import { DEPARTMENTS, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, UNITS, DEFAULT_UNIT_MULTIPLIERS } from './config.js';
+import { DEPARTMENTS, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, UNITS, DEFAULT_UNIT_MULTIPLIERS, isPurchaseRequest } from './config.js';
 
 // ============================================================================
 // Loading Overlay
@@ -478,6 +478,16 @@ export function showItemModal(item = null) {
                             </label>
                             <input type="text" id="item-adjustment-reason" placeholder="e.g. Physical stock count discrepancy, Damaged items written off..." class="w-full p-2.5 border border-amber-300 dark:border-amber-600/60 rounded-lg bg-amber-50/40 dark:bg-gray-700 text-gray-800 dark:text-gray-100 transition-colors duration-300 text-sm">
                             <p class="text-[11px] text-gray-500 dark:text-gray-400 mt-1">Increasing or decreasing stock is permanently logged to the Stock Movement Audit Trail.</p>
+                            ${item ? `
+                                <div class="mt-2.5 p-2 rounded-lg bg-gray-100/70 dark:bg-gray-750 border border-gray-200 dark:border-gray-600 flex items-center justify-between text-xs">
+                                    <span class="text-gray-600 dark:text-gray-300 flex items-center">
+                                        <i class="fas fa-history text-indigo-500 mr-1.5"></i> Movement History
+                                    </span>
+                                    <button type="button" class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 font-semibold view-item-history-btn" data-id="${item.id}">
+                                        View Audit Trail ➔
+                                    </button>
+                                </div>
+                            ` : ''}
                         </div>
                     </div>
                     <div class="flex justify-end space-x-3 mt-6 pt-3 border-t border-gray-100 dark:border-gray-700">
@@ -1185,18 +1195,24 @@ export function hideReceiveGoodsModal() {
 // Modals — Stock Movements / Audit History
 // ============================================================================
 
-export function showStockLogModal() {
+export function showStockLogModal(filterItem = null) {
     const modal = document.getElementById('stock-log-modal');
     if (!modal) return;
+
+    const isFiltered = !!filterItem;
+    const title = isFiltered ? `Audit Trail: ${filterItem.name}` : `Stock Movement & Usage Audit Trail`;
+    const subtitle = isFiltered
+        ? `Movement and adjustment history for <strong>${filterItem.name}</strong> (Category: ${filterItem.category || 'General'} | Current Stock: <strong>${filterItem.stock} ${filterItem.unit || ''}</strong>).`
+        : `Real-time log of all items received (Stock In), issued to departments (Stock Out), and inventory recount adjustments.`;
 
     modal.innerHTML = `
         <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-4xl transition-colors duration-300 overflow-hidden mx-4 max-h-[90vh] flex flex-col">
             <div class="p-5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750">
                 <div>
                     <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center">
-                        <i class="fas fa-history mr-2 text-slate-700 dark:text-slate-300"></i> Stock Movement & Usage Audit Trail
+                        <i class="fas fa-history mr-2 ${isFiltered ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-700 dark:text-slate-300'}"></i> ${title}
                     </h3>
-                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Real-time log of all items received (Stock In) and issued to departments (Stock Out).</p>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">${subtitle}</p>
                 </div>
                 <button id="close-stock-log-btn" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" aria-label="Close modal">
                     <i class="fas fa-times"></i>
@@ -1205,17 +1221,36 @@ export function showStockLogModal() {
             <div class="p-4 overflow-y-auto flex-1">
                 <div id="stock-movements-table-container"></div>
             </div>
-            <div class="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-750 flex justify-end">
+            <div class="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-750 flex justify-between items-center">
+                <div>
+                    ${isFiltered ? `
+                        <button type="button" id="show-all-movements-btn" class="text-xs text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 font-semibold flex items-center">
+                            <i class="fas fa-list-ul mr-1.5"></i> View Complete Store Movement Log
+                        </button>
+                    ` : ''}
+                </div>
                 <button type="button" id="close-stock-log-btn-bottom" class="px-5 py-2 bg-slate-700 hover:bg-slate-800 text-white text-sm font-medium rounded-md transition-colors shadow">Close</button>
             </div>
         </div>
     `;
 
-    renderStockMovements(state.stockMovementsCache);
+    const allMovements = state.stockMovementsCache || [];
+    const movementsToDisplay = isFiltered
+        ? allMovements.filter(m => m.itemId === filterItem.id || (m.itemName && m.itemName.trim().toLowerCase() === filterItem.name.trim().toLowerCase()))
+        : allMovements;
+
+    renderStockMovements(movementsToDisplay);
 
     modal.classList.remove('hidden', 'opacity-0', 'invisible');
     document.getElementById('close-stock-log-btn').addEventListener('click', hideStockLogModal);
     document.getElementById('close-stock-log-btn-bottom').addEventListener('click', hideStockLogModal);
+
+    const showAllBtn = document.getElementById('show-all-movements-btn');
+    if (showAllBtn) {
+        showAllBtn.addEventListener('click', () => {
+            showStockLogModal(null);
+        });
+    }
 }
 
 export function hideStockLogModal() {
@@ -1971,6 +2006,9 @@ export function renderInventory(items, searchTerm = '') {
                     <button data-id="${item.id}" class="issue-item-btn p-1.5 text-blue-600 hover:text-blue-800 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/50 rounded transition-colors" title="Issue / Check Out stock to department" ${item.stock <= 0 ? 'disabled style="opacity: 0.35; cursor: not-allowed;"' : ''}>
                         <i class="fas fa-dolly"></i>
                     </button>
+                    <button data-id="${item.id}" class="view-item-history-btn p-1.5 text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 rounded transition-colors" aria-label="View history" title="View Audit Trail & Movement History">
+                        <i class="fas fa-history"></i>
+                    </button>
                     <button data-id="${item.id}" class="edit-item-btn p-1.5 text-hotel-accent hover:text-hotel-secondary hover:bg-amber-50 dark:hover:bg-amber-950/50 rounded transition-colors" aria-label="Edit item" title="Edit Item Details & Adjust Stock">
                         <i class="fas fa-edit"></i>
                     </button>
@@ -2002,6 +2040,7 @@ export function renderInventory(items, searchTerm = '') {
         currentSortIcon.classList.remove('fa-sort');
         currentSortIcon.classList.add(state.inventorySortDirection === 'asc' ? 'fa-sort-up' : 'fa-sort-down');
     }
+    renderStoreOperations();
     updateUIVisibility();
 }
 
@@ -2492,6 +2531,21 @@ export function showStockReconciliationModal() {
 
             <!-- Modal Body -->
             <div class="p-5 overflow-y-auto flex-1 space-y-4">
+                <!-- Educational Explainer Card -->
+                <div class="bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60 rounded-lg p-3 text-xs text-indigo-950 dark:text-indigo-200 flex items-start space-x-2.5">
+                    <i class="fas fa-info-circle text-indigo-600 dark:text-indigo-400 text-sm mt-0.5 flex-shrink-0"></i>
+                    <div class="flex-1 space-y-1">
+                        <div class="font-bold text-gray-900 dark:text-gray-100">How Stock Reconciliation Works:</div>
+                        <p class="leading-relaxed">
+                            <strong>System Stock</strong> is what is currently saved on each inventory card. 
+                            <strong>Computed Stock</strong> is calculated from the movement audit ledger (<code class="font-mono bg-indigo-100 dark:bg-indigo-900/60 px-1 py-0.5 rounded text-[11px]">Total IN - Total OUT</code>).
+                        </p>
+                        <p class="text-indigo-800 dark:text-indigo-300">
+                            Items created before movement tracking have 0 movements and show as <em>Needs Baseline</em>. Click <strong>⚡ Auto-Baseline Opening Stock</strong> to automatically record their initial opening balances so your ledger reconciles to 100% Balanced.
+                        </p>
+                    </div>
+                </div>
+
                 <!-- Summary Metrics Cards -->
                 <div id="reconciliation-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
 
@@ -2507,6 +2561,9 @@ export function showStockReconciliationModal() {
                             <input type="text" id="recon-search-input" placeholder="Filter by item or category..." class="w-full pl-8 pr-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-indigo-500 focus:border-indigo-500">
                             <i class="fas fa-search absolute left-2.5 top-2 text-gray-400 text-xs"></i>
                         </div>
+                        <button type="button" id="recon-auto-baseline-btn" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center transition-colors shadow-sm whitespace-nowrap" title="Automatically create opening baseline IN movements for all pre-existing items with 0 movements">
+                            <i class="fas fa-magic mr-1.5"></i> Auto-Baseline Opening Stock
+                        </button>
                         <button type="button" id="recon-export-csv-btn" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center transition-colors shadow-sm whitespace-nowrap" title="Export Reconciliation Report to CSV">
                             <i class="fas fa-file-csv mr-1.5"></i> Export CSV
                         </button>
@@ -2647,9 +2704,22 @@ export function renderReconciliationContent() {
             ? 'text-gray-500 dark:text-gray-400 font-medium'
             : (r.difference > 0 ? 'text-amber-600 dark:text-amber-400 font-bold' : 'text-red-600 dark:text-red-400 font-bold');
 
-        const badgeHtml = r.isMatch
+        let badgeHtml = r.isMatch
             ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-800 dark:bg-green-900/60 dark:text-green-200 border border-green-200 dark:border-green-800"><i class="fas fa-check mr-1 text-[10px]"></i> Balanced</span>`
             : `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-800 dark:bg-red-900/60 dark:text-red-200 border border-red-200 dark:border-red-800"><i class="fas fa-exclamation-triangle mr-1 text-[10px]"></i> Mismatch (${diffDisplay})</span>`;
+
+        if (!r.isMatch && r.movementCount === 0 && r.systemStock > 0) {
+            badgeHtml = `
+                <div class="inline-flex items-center gap-1.5">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 border border-amber-200 dark:border-amber-800" title="Item has physical stock but no opening movement records">
+                        <i class="fas fa-history mr-1 text-[10px]"></i> Needs Baseline
+                    </span>
+                    <button data-id="${r.id}" class="set-single-baseline-btn px-2 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-[10px] font-bold transition-colors shadow-sm" title="Create opening balance movement of +${r.systemStock}">
+                        Set Baseline
+                    </button>
+                </div>
+            `;
+        }
 
         const rowBg = !r.isMatch ? 'bg-red-50/40 dark:bg-red-950/10' : '';
 
@@ -2865,5 +2935,130 @@ export function updateSidebarBadges() {
             storeBadge.classList.add('hidden');
         }
     }
+}
+
+/**
+ * Renders the Storekeeper Action Center directly above the inventory table.
+ * Shows pending requisitions to issue and POs to receive, matching the sidebar badge.
+ */
+export function renderStoreOperations() {
+    const container = document.getElementById('store-operations-action-center');
+    if (!container) return;
+
+    const isStoreStaff = state.userRole === 'Storekeeper' || state.userRole === 'Store Keeper' || state.userRole === 'System Administrator';
+    if (!isStoreStaff) {
+        container.classList.add('hidden');
+        container.innerHTML = '';
+        return;
+    }
+
+    const requests = state.allRequestsCache || [];
+    const requisitionsToIssue = requests.filter(r =>
+        (r.status === 'Approved' || r.status === 'Partially Issued') &&
+        (r.requestType === 'requisition' || r.requestType === 'Requisition' || !isPurchaseRequest(r))
+    );
+    const posToReceive = requests.filter(r =>
+        (r.status === 'Ordered' || r.status === 'Partially Received')
+    );
+
+    const totalCount = requisitionsToIssue.length + posToReceive.length;
+    if (totalCount === 0) {
+        container.classList.add('hidden');
+        container.innerHTML = '';
+        return;
+    }
+
+    container.classList.remove('hidden');
+    container.innerHTML = `
+        <div class="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-gray-800 dark:to-gray-800/95 border border-amber-200 dark:border-amber-800/60 rounded-xl p-4 shadow-sm">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-amber-200/80 dark:border-gray-700 gap-2">
+                <div class="flex items-center space-x-2.5">
+                    <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-amber-500 text-white shadow-sm">
+                        <i class="fas fa-bell mr-1.5 animate-pulse"></i> ${totalCount} Action${totalCount === 1 ? '' : 's'} Required
+                    </span>
+                    <h3 class="font-bold text-gray-900 dark:text-gray-100 text-sm md:text-base">Store Operations Queue</h3>
+                </div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">
+                    Requests waiting for warehouse issuance or vendor receipt (matches your sidebar badge: <strong>${totalCount}</strong>)
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3.5">
+                <!-- Requisitions to Issue (Stock Down) -->
+                <div class="bg-white dark:bg-gray-750/70 rounded-lg p-3 border border-emerald-200 dark:border-emerald-800/40">
+                    <div class="flex items-center justify-between mb-2 pb-1.5 border-b border-gray-150 dark:border-gray-700">
+                        <div class="flex items-center space-x-2">
+                            <span class="w-6 h-6 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 flex items-center justify-center text-xs font-bold">
+                                <i class="fas fa-dolly"></i>
+                            </span>
+                            <span class="text-xs font-bold text-gray-800 dark:text-gray-100 uppercase tracking-wide">Approved Requisitions to Issue (${requisitionsToIssue.length})</span>
+                        </div>
+                    </div>
+                    ${requisitionsToIssue.length === 0 ? `
+                        <p class="text-xs text-gray-400 py-3 text-center">No requisitions currently waiting for issue.</p>
+                    ` : `
+                        <div class="space-y-2 max-h-56 overflow-y-auto pr-1">
+                            ${requisitionsToIssue.map(r => {
+                                const itemCount = (r.items || []).length;
+                                const itemsSummary = (r.items || []).slice(0, 2).map(it => `${it.quantity}x ${it.name}`).join(', ') + (itemCount > 2 ? ` +${itemCount - 2} more` : '');
+                                return `
+                                    <div class="p-2.5 rounded-lg bg-gray-50 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600 flex items-center justify-between text-xs gap-2">
+                                        <div class="min-w-0 flex-1">
+                                            <div class="flex items-center space-x-1.5 font-semibold text-gray-900 dark:text-gray-100">
+                                                <span>#${r.id.slice(-6).toUpperCase()}</span>
+                                                <span class="text-gray-400">•</span>
+                                                <span class="text-emerald-700 dark:text-emerald-300 font-bold">${r.department || 'Hotel'}</span>
+                                            </div>
+                                            <div class="text-[11px] text-gray-500 dark:text-gray-400 truncate mt-0.5" title="${itemsSummary}">${itemsSummary}</div>
+                                        </div>
+                                        <button data-id="${r.id}" class="issue-req-btn shrink-0 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md text-xs font-bold flex items-center transition-colors shadow-sm" title="Issue items to department">
+                                            <i class="fas fa-dolly mr-1"></i> Issue Items
+                                        </button>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    `}
+                </div>
+
+                <!-- Purchase Orders to Receive (Stock Up) -->
+                <div class="bg-white dark:bg-gray-750/70 rounded-lg p-3 border border-blue-200 dark:border-blue-800/40">
+                    <div class="flex items-center justify-between mb-2 pb-1.5 border-b border-gray-150 dark:border-gray-700">
+                        <div class="flex items-center space-x-2">
+                            <span class="w-6 h-6 rounded-full bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300 flex items-center justify-center text-xs font-bold">
+                                <i class="fas fa-truck-loading"></i>
+                            </span>
+                            <span class="text-xs font-bold text-gray-800 dark:text-gray-100 uppercase tracking-wide">Ordered POs to Receive (${posToReceive.length})</span>
+                        </div>
+                    </div>
+                    ${posToReceive.length === 0 ? `
+                        <p class="text-xs text-gray-400 py-3 text-center">No purchase orders currently awaiting receipt.</p>
+                    ` : `
+                        <div class="space-y-2 max-h-56 overflow-y-auto pr-1">
+                            ${posToReceive.map(r => {
+                                const itemCount = (r.items || []).length;
+                                const itemsSummary = (r.items || []).slice(0, 2).map(it => `${it.quantity}x ${it.name}`).join(', ') + (itemCount > 2 ? ` +${itemCount - 2} more` : '');
+                                return `
+                                    <div class="p-2.5 rounded-lg bg-gray-50 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600 flex items-center justify-between text-xs gap-2">
+                                        <div class="min-w-0 flex-1">
+                                            <div class="flex items-center space-x-1.5 font-semibold text-gray-900 dark:text-gray-100">
+                                                <span>#${r.id.slice(-6).toUpperCase()}</span>
+                                                <span class="text-gray-400">•</span>
+                                                <span class="text-blue-700 dark:text-blue-300 font-bold">${r.supplier || 'Vendor'}</span>
+                                            </div>
+                                            <div class="text-[11px] text-gray-500 dark:text-gray-400 truncate mt-0.5" title="${itemsSummary}">${itemsSummary}</div>
+                                        </div>
+                                        <button data-id="${r.id}" class="receive-po-goods-btn shrink-0 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-xs font-bold flex items-center transition-colors shadow-sm" title="Receive delivered goods into store">
+                                            <i class="fas fa-truck-loading mr-1"></i> Receive Goods
+                                        </button>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    `}
+                </div>
+            </div>
+        </div>
+    `;
 }
 
