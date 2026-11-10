@@ -23,7 +23,7 @@ import {
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix,
     handleItemRowUnitChange, renderNotificationBell, updateSidebarBadges, toggleNotificationDropdown,
     renderStoreOperations
-} from './ui.js?v=2.3';
+} from './ui.js?v=2.4';
 import {
     handleLogin, handleLogout, handleCreateUser,
     handleEditUser, handleSaveUserEdit, handleResetUserPassword, handleDeleteUser,
@@ -34,8 +34,8 @@ import {
     handleAddDepartment, handleDeleteDepartment, handleSaveRolePermissions, handleResetRolePermissions,
     runOneTimeRequestAudit, handleMarkAllNotificationsRead, handleNotificationClick,
     handleBaselineOpeningStock
-} from './actions.js?v=2.3';
-import { initializeFirebase } from './auth.js?v=2.3';
+} from './actions.js?v=2.4';
+import { initializeFirebase } from './auth.js?v=2.4';
 
 // ============================================================================
 // DOM Content Loaded — Wire everything up
@@ -143,14 +143,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Stock log modal
     const stockLogBtn = document.getElementById('view-stock-log-btn');
-    if (stockLogBtn) stockLogBtn.addEventListener('click', showStockLogModal);
+    if (stockLogBtn) stockLogBtn.addEventListener('click', () => showStockLogModal(null));
 
     // Stock reconciliation modal
     const stockReconBtn = document.getElementById('view-stock-reconciliation-btn');
-    if (stockReconBtn) stockReconBtn.addEventListener('click', showStockReconciliationModal);
+    if (stockReconBtn) stockReconBtn.addEventListener('click', () => showStockReconciliationModal());
 
     const reportStockReconBtn = document.getElementById('report-stock-reconciliation-btn');
-    if (reportStockReconBtn) reportStockReconBtn.addEventListener('click', showStockReconciliationModal);
+    if (reportStockReconBtn) reportStockReconBtn.addEventListener('click', () => showStockReconciliationModal());
 
     // CSV download
     const csvBtn = document.getElementById('download-csv-btn');
@@ -413,6 +413,18 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // View Stock Movement Log (header button via delegation)
+        if (e.target.closest('#view-stock-log-btn')) {
+            showStockLogModal(null);
+            return;
+        }
+
+        // View Stock Reconciliation (header & report buttons via delegation)
+        if (e.target.closest('#view-stock-reconciliation-btn') || e.target.closest('#report-stock-reconciliation-btn')) {
+            showStockReconciliationModal();
+            return;
+        }
+
         // Auto-baseline opening stock (all items)
         if (e.target.closest('#recon-auto-baseline-btn')) {
             handleBaselineOpeningStock();
@@ -552,6 +564,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (e.target.closest('#close-stock-log-btn') || e.target.closest('#close-stock-log-btn-bottom')) {
             hideStockLogModal();
+            return;
+        }
+        if (e.target.closest('#close-stock-reconciliation-btn') || e.target.closest('#close-stock-reconciliation-btn-bottom')) {
+            hideStockReconciliationModal();
             return;
         }
         if (e.target.closest('#close-user-modal-btn') || e.target.closest('#cancel-user-modal-btn')) {

@@ -20,7 +20,7 @@ import {
     showReceiveGoodsModal, hideReceiveGoodsModal,
     showRequestDetailsModal, renderReconciliationContent,
     hasPermission, getActiveDepartments, renderPermissionsMatrix, updateUIVisibility
-} from './ui.js?v=2.3';
+} from './ui.js?v=2.4';
 
 // ============================================================================
 // Authentication Actions

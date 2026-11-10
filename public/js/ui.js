@@ -1198,10 +1198,18 @@ export function showStockLogModal(filterItem = null) {
     const modal = document.getElementById('stock-log-modal');
     if (!modal) return;
 
-    const isFiltered = !!filterItem;
-    const title = isFiltered ? `Audit Trail: ${filterItem.name}` : `Stock Movement & Usage Audit Trail`;
+    // Guard against DOM Event objects being passed if called directly as event listener
+    const isValidItem = filterItem &&
+        typeof filterItem === 'object' &&
+        !(filterItem instanceof Event) &&
+        (typeof filterItem.name === 'string' || typeof filterItem.id === 'string');
+
+    const item = isValidItem ? filterItem : null;
+    const isFiltered = !!item;
+    const itemName = item?.name || '';
+    const title = isFiltered ? `Audit Trail: ${itemName}` : `Stock Movement & Usage Audit Trail`;
     const subtitle = isFiltered
-        ? `Movement and adjustment history for <strong>${filterItem.name}</strong> (Category: ${filterItem.category || 'General'} | Current Stock: <strong>${filterItem.stock} ${filterItem.unit || ''}</strong>).`
+        ? `Movement and adjustment history for <strong>${itemName}</strong> (Category: ${item.category || 'General'} | Current Stock: <strong>${item.stock ?? 0} ${item.unit || ''}</strong>).`
         : `Real-time log of all items received (Stock In), issued to departments (Stock Out), and inventory recount adjustments.`;
 
     modal.innerHTML = `
@@ -1234,13 +1242,21 @@ export function showStockLogModal(filterItem = null) {
     `;
 
     const allMovements = state.stockMovementsCache || [];
-    const movementsToDisplay = isFiltered
-        ? allMovements.filter(m => m.itemId === filterItem.id || (m.itemName && m.itemName.trim().toLowerCase() === filterItem.name.trim().toLowerCase()))
-        : allMovements;
+    let movementsToDisplay = allMovements;
+    if (isFiltered) {
+        const filterId = item.id;
+        const filterLcName = (item.name || '').trim().toLowerCase();
+        movementsToDisplay = allMovements.filter(m => {
+            const matchesId = filterId && m.itemId === filterId;
+            const matchesName = filterLcName && m.itemName && m.itemName.trim().toLowerCase() === filterLcName;
+            return matchesId || matchesName;
+        });
+    }
 
     renderStockMovements(movementsToDisplay);
 
     modal.classList.remove('hidden', 'opacity-0', 'invisible');
+    modal.classList.add('opacity-100');
     document.getElementById('close-stock-log-btn').addEventListener('click', hideStockLogModal);
     document.getElementById('close-stock-log-btn-bottom').addEventListener('click', hideStockLogModal);
 
@@ -1255,6 +1271,7 @@ export function showStockLogModal(filterItem = null) {
 export function hideStockLogModal() {
     const modal = document.getElementById('stock-log-modal');
     if (!modal) return;
+    modal.classList.remove('opacity-100');
     modal.classList.add('opacity-0', 'invisible');
     setTimeout(() => modal.classList.add('hidden'), 300);
 }
