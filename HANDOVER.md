@@ -275,7 +275,36 @@ The system solves the unit-of-measure pricing mismatch (e.g., 1 Kg of sugar vs. 
 
 ---
 
-## 10. Deployment & Routine Maintenance
+## 10. Manual Stock Adjustments & Audit Integrity
+
+When editing inventory items via **Inventory & Store > Edit Item**:
+1. **Full Stock Change Tracking:**
+   - Any modification to an item's stock amount (increase or decrease) is automatically tracked.
+   - **Stock Increases:** Logged as movement type `IN` with `previousStock ➔ newStock`, quantity changed, authorizing user email, and timestamp.
+   - **Stock Decreases:** Logged as movement type `OUT` with `previousStock ➔ newStock`, quantity changed, authorizing user email, and timestamp.
+2. **Mandatory Audit Reason Field:**
+   - The Edit Item modal includes an **Adjustment Reason / Audit Note** field (e.g., physical stock recount, damaged goods written off, recount discrepancy).
+3. **Reconciliation Balancing:**
+   - Because stock increases count as `IN` and decreases count as `OUT`, the **Stock Reconciliation** formula (`Total IN - Total OUT = System Stock`) remains 100% mathematically balanced and free of unexplained discrepancies.
+4. **Initial Stock & Item Deletion Audit:**
+   - Adding a new item with opening stock automatically logs an `IN` movement for initial setup.
+   - Deleting an inventory item with remaining stock logs a formal write-off `OUT` movement.
+5. **General Manager Notifications:**
+   - Any manual stock adjustment immediately triggers an in-app alert to the General Manager detailing the staff member who made the edit, the item, previous stock, new stock, and the recorded reason.
+
+---
+
+## 11. Full-Screen Responsive Layout Optimization
+
+* The Inventory view is fully optimized for standard hotel terminal screens (1366x768, 1440x900, 1080p with Windows 125%/150% scaling) without requiring browser zoom-out:
+  - Table cell padding streamlined to `px-3.5 py-2.5` to eliminate excess horizontal space.
+  - Action buttons grouped with `inline-flex` and compact icon sizing.
+  - Item names adapt cleanly with title tooltips.
+  - Header control buttons grouped responsively so content fits 100% full screen naturally.
+
+---
+
+## 12. Deployment & Routine Maintenance
 
 ### Deployment Command
 Always use quotes when deploying multiple targets on Windows PowerShell:

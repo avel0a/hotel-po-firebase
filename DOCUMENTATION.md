@@ -295,6 +295,9 @@ The system provides 5 standard roles configured in [`public/js/config.js`](publi
 
 ### 5.6 Inventory Management & Quick Restock
 * Complete SKU tracking with real-time stock status (In Stock, Low Stock, Out of Stock).
+* **Full-Screen Responsive Layout:** Table and control elements optimized to fit standard laptop and terminal resolutions (1366x768, 1440x900, 1080p scaled) at 100% zoom without requiring zoom-out.
+* **Manual Stock Adjustments & Full Audit:** When editing an item's stock (increase or decrease), the system automatically captures previous vs. new stock, prompts for an adjustment reason, creates an immutable audit record in `stock_movements`, and alerts the General Manager.
+* **Initial Stock & Write-Off Tracking:** Opening stock for newly created items is recorded as `IN`, and deleted items with remaining quantities are recorded as write-off `OUT` movements.
 * **"Restock Low Items" 1-Click Button:** Scans for items below `min` and auto-generates a pre-filled Purchase Order.
 * **Ad-Hoc Issue & Receive:** Standalone modals for walk-up staff issuances or direct off-PO vendor deliveries.
 

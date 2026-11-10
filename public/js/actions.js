@@ -1037,8 +1037,78 @@ export async function handleItemFormSubmit(e) {
     try {
         const collectionRef = collection(state.db, 'inventory');
         if (itemId) {
+            const prevStock = Number(document.getElementById('item-prev-stock')?.value ?? itemStock);
+            const prevPrice = Number(document.getElementById('item-prev-price')?.value ?? itemPrice);
+            const reasonInput = document.getElementById('item-adjustment-reason')?.value.trim() || '';
+            const stockDiff = itemStock - prevStock;
+
+            // Save the updated item
             await setDoc(doc(collectionRef, itemId), itemData, { merge: true });
-            showNotification("Item updated successfully!");
+
+            // If stock quantity was increased or decreased, track in audit trail
+            if (stockDiff !== 0) {
+                const isIncrease = stockDiff > 0;
+                const qtyChanged = Math.abs(stockDiff);
+                const movementType = isIncrease ? 'IN' : 'OUT';
+                const defaultReason = isIncrease
+                    ? `Physical recount / Stock increase (+${qtyChanged} ${itemUnit})`
+                    : `Physical recount / Stock decrease (-${qtyChanged} ${itemUnit})`;
+                const fullReason = reasonInput
+                    ? `Manual Stock Adjustment (${isIncrease ? '+' : '-'}${qtyChanged} ${itemUnit}): ${reasonInput}`
+                    : `Manual Stock Adjustment: ${defaultReason}`;
+
+                // Immutable log in stock_movements
+                await addDoc(collection(state.db, 'stock_movements'), {
+                    itemId: itemId,
+                    itemName: itemName,
+                    category: itemCategory,
+                    type: movementType,
+                    quantity: qtyChanged,
+                    previousStock: prevStock,
+                    newStock: itemStock,
+                    unitPrice: itemPrice,
+                    department: 'Store',
+                    recipient: isIncrease ? 'Store Restock / Stock Recount' : 'Store Write-off / Stock Recount',
+                    reason: fullReason,
+                    issuedBy: state.userId,
+                    issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
+                    timestamp: serverTimestamp()
+                });
+
+                // In-app alert to GM for accountability
+                await createInAppNotification({
+                    recipientRole: 'General Manager',
+                    title: `Stock Adjustment: ${itemName}`,
+                    message: `${state.auth?.currentUser?.email || 'Storekeeper'} adjusted stock for "${itemName}": ${prevStock} ➔ ${itemStock} ${itemUnit} (${isIncrease ? '+' : '-'}${qtyChanged}). Reason: ${reasonInput || defaultReason}`,
+                    type: 'info',
+                    requestId: '',
+                    requestType: '',
+                    department: 'Store'
+                });
+
+                showNotification(`Item "${itemName}" updated. Stock adjustment (${isIncrease ? '+' : '-'}${qtyChanged} ${itemUnit}) logged to audit trail!`);
+            } else {
+                // Stock did not change; check if unit price was modified
+                if (prevPrice !== itemPrice) {
+                    await addDoc(collection(state.db, 'stock_movements'), {
+                        itemId: itemId,
+                        itemName: itemName,
+                        category: itemCategory,
+                        type: 'IN',
+                        quantity: 0,
+                        previousStock: prevStock,
+                        newStock: itemStock,
+                        unitPrice: itemPrice,
+                        department: 'Store',
+                        recipient: 'Store Price Revaluation',
+                        reason: `Unit valuation updated: Birr ${prevPrice.toFixed(2)} ➔ Birr ${itemPrice.toFixed(2)}${reasonInput ? ' (' + reasonInput + ')' : ''}`,
+                        issuedBy: state.userId,
+                        issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
+                        timestamp: serverTimestamp()
+                    });
+                }
+                showNotification("Item updated successfully!");
+            }
         } else {
             const q = query(collectionRef, where("name", "==", itemName));
             const querySnapshot = await getDocs(q);
@@ -1047,8 +1117,28 @@ export async function handleItemFormSubmit(e) {
                 hideLoadingOverlay();
                 return;
             }
-            await addDoc(collectionRef, itemData);
-            showNotification("Item added successfully!");
+            const newDocRef = await addDoc(collectionRef, itemData);
+
+            // If initial stock was specified > 0, log opening stock movement so reconciliation balances from day 1
+            if (itemStock > 0) {
+                await addDoc(collection(state.db, 'stock_movements'), {
+                    itemId: newDocRef.id,
+                    itemName: itemName,
+                    category: itemCategory,
+                    type: 'IN',
+                    quantity: itemStock,
+                    previousStock: 0,
+                    newStock: itemStock,
+                    unitPrice: itemPrice,
+                    department: 'Store',
+                    recipient: 'Store Warehouse / Initial Setup',
+                    reason: `Initial Opening Stock Registered (+${itemStock} ${itemUnit})`,
+                    issuedBy: state.userId,
+                    issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
+                    timestamp: serverTimestamp()
+                });
+            }
+            showNotification("Item added successfully with initial stock logged!");
         }
         hideItemModal();
     } catch (error) {
@@ -1070,6 +1160,28 @@ export async function deleteInventoryItem(id) {
     showConfirmModal("Are you sure you want to delete this item? This action cannot be undone.", async () => {
         showLoadingOverlay();
         try {
+            const itemToDelete = (state.inventoryItemsCache || []).find(i => i.id === id);
+            const remainingStock = Number(itemToDelete?.stock || 0);
+
+            if (itemToDelete && remainingStock > 0) {
+                await addDoc(collection(state.db, 'stock_movements'), {
+                    itemId: id,
+                    itemName: itemToDelete.name || 'Deleted Item',
+                    category: itemToDelete.category || 'Store',
+                    type: 'OUT',
+                    quantity: remainingStock,
+                    previousStock: remainingStock,
+                    newStock: 0,
+                    unitPrice: itemToDelete.price || 0,
+                    department: 'Store',
+                    recipient: 'Item Deletion / Write-off',
+                    reason: `Item removed from inventory catalog (Stock written off: ${remainingStock} ${itemToDelete.unit || 'units'})`,
+                    issuedBy: state.userId,
+                    issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
+                    timestamp: serverTimestamp()
+                });
+            }
+
             await deleteDoc(doc(state.db, 'inventory', id));
             showNotification("Item deleted.");
         } catch (error) {

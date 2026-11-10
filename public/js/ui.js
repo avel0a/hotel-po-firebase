@@ -423,38 +423,66 @@ export function loadTheme() {
 export function showItemModal(item = null) {
     const modal = document.getElementById('item-modal');
     modal.innerHTML = `
-        <div class="bg-white rounded-lg shadow-xl w-full max-w-md transition-colors duration-300">
-            <div class="p-4 border-b flex justify-between items-center">
-                <h3 id="modal-title" class="text-lg font-semibold">Add New Inventory Item</h3>
-                <button id="close-item-modal-btn" class="text-gray-500 hover:text-gray-700 transition-colors" aria-label="Close modal"><i class="fas fa-times"></i></button>
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md transition-colors duration-300">
+            <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750 rounded-t-xl">
+                <h3 id="modal-title" class="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center">
+                    <i class="fas fa-box-open mr-2 text-hotel-accent"></i> ${item ? 'Edit Inventory Item' : 'Add New Inventory Item'}
+                </h3>
+                <button id="close-item-modal-btn" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" aria-label="Close modal"><i class="fas fa-times"></i></button>
             </div>
-            <div class="p-4">
+            <div class="p-5">
                 <form id="item-form">
                     <input type="hidden" id="item-id">
+                    <input type="hidden" id="item-prev-stock" value="${item ? (item.stock ?? 0) : 0}">
+                    <input type="hidden" id="item-prev-price" value="${item ? (item.price ?? 0) : 0}">
                     <div class="space-y-4">
-                        <div><label for="item-name" class="block text-sm font-medium text-gray-700 mb-1">Item Name</label><input type="text" id="item-name" class="item-name w-full p-2 border border-gray-300 rounded-md transition-colors duration-300" required></div>
-                        <div><label for="item-category" class="block text-sm font-medium text-gray-700 mb-1">Category</label><select id="item-category" class="w-full p-2 border border-gray-300 rounded-md transition-colors duration-300"><option>Housekeeping</option><option>Kitchen</option><option>Maintenance</option><option>Office</option><option>Information Technology</option><option>Food&Beverage</option><option>SPA</option><option>Security</option><option>Finance</option><option>Other</option></select></div>
-                        <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label for="item-name" class="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">Item Name</label>
+                            <input type="text" id="item-name" class="item-name w-full p-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 transition-colors duration-300 text-sm" placeholder="e.g. White Sugar" required>
+                        </div>
+                        <div>
+                            <label for="item-category" class="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">Category</label>
+                            <select id="item-category" class="w-full p-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 transition-colors duration-300 text-sm">
+                                <option>Housekeeping</option><option>Kitchen</option><option>Maintenance</option><option>Office</option><option>Information Technology</option><option>Food&Beverage</option><option>SPA</option><option>Security</option><option>Finance</option><option>Other</option>
+                            </select>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
                             <div>
-                                <label for="item-unit" class="block text-sm font-medium text-gray-700 mb-1">Base Unit</label>
-                                <select id="item-unit" class="w-full p-2 border border-gray-300 rounded-md transition-colors duration-300">
+                                <label for="item-unit" class="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">Base Unit</label>
+                                <select id="item-unit" class="w-full p-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 transition-colors duration-300 text-sm">
                                     ${UNITS.map(u => `<option value="${u}">${u}</option>`).join('')}
                                 </select>
                             </div>
                             <div>
-                                <label for="item-package-size" class="block text-sm font-medium text-gray-700 mb-1" title="Number of base units in one box/bag/pack">Units per Package</label>
-                                <input type="number" min="1" step="1" id="item-package-size" value="1" placeholder="e.g. 25 for 25kg/bag" class="w-full p-2 border border-gray-300 rounded-md transition-colors duration-300">
+                                <label for="item-package-size" class="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1" title="Number of base units in one box/bag/pack">Units / Pkg</label>
+                                <input type="number" min="1" step="1" id="item-package-size" value="1" placeholder="e.g. 25" class="w-full p-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 transition-colors duration-300 text-sm">
                             </div>
                         </div>
-                        <div class="grid grid-cols-2 gap-4">
-                            <div><label for="item-stock" class="block text-sm font-medium text-gray-700 mb-1">Current Stock</label><input type="number" id="item-stock" class="w-full p-2 border border-gray-300 rounded-md transition-colors duration-300" required></div>
-                            <div><label for="item-min" class="block text-sm font-medium text-gray-700 mb-1">Minimum Level</label><input type="number" id="item-min" class="w-full p-2 border border-gray-300 rounded-md transition-colors duration-300" required></div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label for="item-stock" class="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">Current Stock</label>
+                                <input type="number" id="item-stock" min="0" class="w-full p-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 font-bold transition-colors duration-300 text-sm" required>
+                            </div>
+                            <div>
+                                <label for="item-min" class="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">Min. Alert Level</label>
+                                <input type="number" id="item-min" min="0" class="w-full p-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 transition-colors duration-300 text-sm" required>
+                            </div>
                         </div>
-                        <div><label for="item-price" class="block text-sm font-medium text-gray-700 mb-1">Base Unit Price (Birr)</label><input type="number" step="0.01" id="item-price" class="w-full p-2 border border-gray-300 rounded-md transition-colors duration-300" required></div>
+                        <div>
+                            <label for="item-price" class="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">Base Unit Price (Birr)</label>
+                            <input type="number" step="0.01" min="0" id="item-price" class="w-full p-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 transition-colors duration-300 text-sm" required>
+                        </div>
+                        <div id="item-adjustment-reason-container" class="${item ? '' : 'hidden'}">
+                            <label for="item-adjustment-reason" class="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">
+                                <i class="fas fa-clipboard-check text-amber-500 mr-1"></i> Adjustment Reason / Audit Note
+                            </label>
+                            <input type="text" id="item-adjustment-reason" placeholder="e.g. Physical stock count discrepancy, Damaged items written off..." class="w-full p-2.5 border border-amber-300 dark:border-amber-600/60 rounded-lg bg-amber-50/40 dark:bg-gray-700 text-gray-800 dark:text-gray-100 transition-colors duration-300 text-sm">
+                            <p class="text-[11px] text-gray-500 dark:text-gray-400 mt-1">Increasing or decreasing stock is permanently logged to the Stock Movement Audit Trail.</p>
+                        </div>
                     </div>
-                    <div class="flex justify-end space-x-3 mt-6">
-                        <button type="button" id="cancel-item-modal-btn" class="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700 transition-colors">Cancel</button>
-                        <button type="submit" class="px-4 py-2 bg-hotel-primary text-white rounded-md hover:bg-hotel-secondary transition-colors">Save Item</button>
+                    <div class="flex justify-end space-x-3 mt-6 pt-3 border-t border-gray-100 dark:border-gray-700">
+                        <button type="button" id="cancel-item-modal-btn" class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm font-medium transition-colors">Cancel</button>
+                        <button type="submit" class="px-4 py-2 bg-hotel-primary text-white rounded-lg hover:bg-hotel-secondary text-sm font-semibold transition-colors shadow-sm">Save Item</button>
                     </div>
                 </form>
             </div>
@@ -467,8 +495,10 @@ export function showItemModal(item = null) {
 
     const modalTitle = modal.querySelector('#modal-title');
     if (item) {
-        if (modalTitle) modalTitle.textContent = 'Edit Inventory Item';
+        if (modalTitle) modalTitle.innerHTML = '<i class="fas fa-edit mr-2 text-hotel-accent"></i> Edit Inventory Item';
         modal.querySelector('#item-id').value = item.id;
+        modal.querySelector('#item-prev-stock').value = item.stock ?? 0;
+        modal.querySelector('#item-prev-price').value = item.price ?? 0;
         modal.querySelector('#item-name').value = item.name;
         modal.querySelector('#item-category').value = item.category;
         modal.querySelector('#item-unit').value = item.unit || 'Each';
@@ -477,12 +507,15 @@ export function showItemModal(item = null) {
         modal.querySelector('#item-min').value = item.min;
         modal.querySelector('#item-price').value = item.price || 0;
     } else {
-        if (modalTitle) modalTitle.textContent = 'Add New Inventory Item';
+        if (modalTitle) modalTitle.innerHTML = '<i class="fas fa-box-open mr-2 text-hotel-accent"></i> Add New Inventory Item';
         modal.querySelector('#item-id').value = '';
+        modal.querySelector('#item-prev-stock').value = 0;
+        modal.querySelector('#item-prev-price').value = 0;
         modal.querySelector('#item-unit').value = 'Each';
         modal.querySelector('#item-package-size').value = 1;
     }
     modal.classList.remove('hidden', 'opacity-0', 'invisible');
+}
 }
 
 export function hideItemModal() {
@@ -1930,28 +1963,30 @@ export function renderInventory(items, searchTerm = '') {
         else if (item.stock < item.min) { status = 'Low Stock'; color = 'yellow'; }
         else { status = 'In Stock'; color = 'green'; }
         const actionsHtml = canEdit ? `
-            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                <button data-id="${item.id}" class="receive-item-btn text-emerald-600 hover:text-emerald-800 dark:text-emerald-400 dark:hover:text-emerald-300 mr-3 transition-colors" title="Receive / Fill Store (Stock In)">
-                    <i class="fas fa-arrow-circle-down"></i>
-                </button>
-                <button data-id="${item.id}" class="issue-item-btn text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 mr-3 transition-colors" title="Issue / Check Out stock to department" ${item.stock <= 0 ? 'disabled style="opacity: 0.35; cursor: not-allowed;"' : ''}>
-                    <i class="fas fa-dolly"></i>
-                </button>
-                <button data-id="${item.id}" class="edit-item-btn text-hotel-accent hover:text-hotel-secondary mr-3 transition-colors" aria-label="Edit item" title="Edit Item Details">
-                    <i class="fas fa-edit"></i>
-                </button>
-                <button data-id="${item.id}" class="delete-item-btn text-red-500 hover:text-red-700 transition-colors" aria-label="Delete item" title="Delete Item">
-                    <i class="fas fa-trash"></i>
-                </button>
+            <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-right text-sm">
+                <div class="inline-flex items-center space-x-1">
+                    <button data-id="${item.id}" class="receive-item-btn p-1.5 text-emerald-600 hover:text-emerald-800 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 rounded transition-colors" title="Receive / Fill Store (Stock In)">
+                        <i class="fas fa-arrow-circle-down"></i>
+                    </button>
+                    <button data-id="${item.id}" class="issue-item-btn p-1.5 text-blue-600 hover:text-blue-800 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/50 rounded transition-colors" title="Issue / Check Out stock to department" ${item.stock <= 0 ? 'disabled style="opacity: 0.35; cursor: not-allowed;"' : ''}>
+                        <i class="fas fa-dolly"></i>
+                    </button>
+                    <button data-id="${item.id}" class="edit-item-btn p-1.5 text-hotel-accent hover:text-hotel-secondary hover:bg-amber-50 dark:hover:bg-amber-950/50 rounded transition-colors" aria-label="Edit item" title="Edit Item Details & Adjust Stock">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                    <button data-id="${item.id}" class="delete-item-btn p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/50 rounded transition-colors" aria-label="Delete item" title="Delete Item">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
             </td>` : '';
         return `
-            <tr class="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-                <td class="px-6 py-4 whitespace-nowrap">${item.name}</td>
-                <td class="px-6 py-4 whitespace-nowrap">${item.category}</td>
-                <td class="px-6 py-4 whitespace-nowrap">Birr ${(item.price || 0).toFixed(2)}${item.unit ? ' / ' + item.unit : ''}</td>
-                <td class="px-6 py-4 whitespace-nowrap">${item.stock} ${item.unit || ''}</td>
-                <td class="px-6 py-4 whitespace-nowrap">${item.min} ${item.unit || ''}</td>
-                <td class="px-6 py-4 whitespace-nowrap"><span class="px-2 py-1 text-xs rounded-full bg-${color}-100 text-${color}-800 dark:bg-${color}-700 dark:text-${color}-200">${status}</span></td>
+            <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/60 transition-colors">
+                <td class="px-3 md:px-4 py-2.5 font-medium text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title="${item.name}">${item.name}</td>
+                <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-xs text-gray-600 dark:text-gray-300">${item.category}</td>
+                <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-xs font-semibold text-gray-800 dark:text-gray-200">Birr ${(item.price || 0).toFixed(2)}${item.unit ? ' / ' + item.unit : ''}</td>
+                <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-xs font-bold ${item.stock <= 0 ? 'text-red-600' : (item.stock < item.min ? 'text-amber-600' : 'text-emerald-600')}">${item.stock} ${item.unit || ''}</td>
+                <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">${item.min} ${item.unit || ''}</td>
+                <td class="px-3 md:px-4 py-2.5 whitespace-nowrap"><span class="px-2 py-0.5 text-[11px] font-semibold rounded-full bg-${color}-100 text-${color}-800 dark:bg-${color}-900/60 dark:text-${color}-200">${status}</span></td>
                 ${actionsHtml}
             </tr>
         `;
