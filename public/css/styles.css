@@ -5,8 +5,13 @@
 /* --------------------------------------------------------------------------
    Base / Body
    -------------------------------------------------------------------------- */
+html, body {
+    max-width: 100%;
+    overflow-x: hidden;
+}
 body {
     min-height: 100vh;
+    min-height: 100dvh;
     background-attachment: fixed;
     position: relative;
 }
@@ -97,8 +102,86 @@ html.dark .sidebar .user-info-section .font-semibold {
 }
 
 @media (max-width: 768px) {
-    .sidebar { transform: translateX(-100%); position: absolute; z-index: 50; height: 100vh; }
-    .sidebar.open { transform: translateX(0); }
+    html, body {
+        overflow-x: hidden;
+        overscroll-behavior-x: none;
+    }
+
+    /* Prevent iOS Safari / mobile browser auto-zoom when tapping inputs */
+    input, select, textarea {
+        font-size: 16px !important;
+    }
+
+    /* Hide animated background SVG on small screens so it never pushes viewport bounds */
+    .svg-bg {
+        display: none;
+    }
+
+    /* Mobile Drawer Sidebar */
+    .sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        height: 100dvh;
+        overflow-y: auto;
+        transform: translateX(-105%);
+        visibility: hidden;
+        pointer-events: none;
+        transition: transform 0.25s ease, visibility 0.25s ease;
+        z-index: 60;
+    }
+    .sidebar.open {
+        transform: translateX(0);
+        visibility: visible;
+        pointer-events: auto;
+        box-shadow: 0 0 0 100vw rgba(0, 0, 0, 0.45);
+    }
+
+    /* Disable hover scale/translate transforms on touch screens to prevent horizontal wiggle */
+    .dashboard-stat-card:hover,
+    .nav-link:hover,
+    #new-request .item-row:hover {
+        transform: none !important;
+    }
+
+    /* Compact card & table padding on mobile phones */
+    .section-content > .bg-white {
+        padding: 0.875rem !important;
+        border-radius: 0.75rem;
+    }
+    .section-content table th,
+    .section-content table td {
+        padding: 0.55rem 0.65rem !important;
+        font-size: 0.8125rem;
+    }
+    #report-filters,
+    #create-user-form {
+        padding: 1rem !important;
+    }
+
+    /* Login card sizing for narrow phones */
+    #login-page .login-card {
+        padding: 1.5rem;
+    }
+    .login-card h2 {
+        font-size: 1.75rem;
+        margin-bottom: 1.25rem;
+    }
+
+    /* Compact FAB so it doesn't cover forms or table buttons on phones */
+    .floating-action-btn {
+        width: 48px;
+        height: 48px;
+        bottom: 1rem;
+        right: 1rem;
+        font-size: 1.25rem;
+    }
+
+    /* Compact charts on mobile */
+    .chart-container {
+        height: 240px !important;
+    }
 }
 
 /* --------------------------------------------------------------------------

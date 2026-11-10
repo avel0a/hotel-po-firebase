@@ -2685,12 +2685,12 @@ export function showStockReconciliationModal() {
 
                 <!-- Controls: Filter Tabs & Search & Export -->
                 <div class="flex flex-col sm:flex-row justify-between items-center gap-3 pt-1">
-                    <div class="flex items-center space-x-1.5 bg-gray-100 dark:bg-gray-700 p-1 rounded-lg text-xs w-full sm:w-auto">
+                    <div class="flex flex-wrap items-center gap-1.5 bg-gray-100 dark:bg-gray-700 p-1 rounded-lg text-xs w-full sm:w-auto">
                         <button type="button" class="recon-filter-btn px-3 py-1.5 rounded-md font-semibold transition-colors bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow-sm" data-filter="all">All Items (<span id="recon-count-all">0</span>)</button>
                         <button type="button" class="recon-filter-btn px-3 py-1.5 rounded-md font-semibold transition-colors text-gray-600 dark:text-gray-300 hover:text-gray-900" data-filter="mismatch">Mismatches (<span id="recon-count-mismatch">0</span>)</button>
                         <button type="button" class="recon-filter-btn px-3 py-1.5 rounded-md font-semibold transition-colors text-gray-600 dark:text-gray-300 hover:text-gray-900" data-filter="match">Matched (<span id="recon-count-match">0</span>)</button>
                     </div>
-                    <div class="flex items-center gap-2 w-full sm:w-auto">
+                    <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                         <div class="relative flex-1 sm:w-56">
                             <input type="text" id="recon-search-input" placeholder="Filter by item or category..." class="w-full pl-8 pr-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-indigo-500 focus:border-indigo-500">
                             <i class="fas fa-search absolute left-2.5 top-2 text-gray-400 text-xs"></i>
