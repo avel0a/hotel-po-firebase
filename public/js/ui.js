@@ -5,7 +5,7 @@
 
 import state from './state.js';
 import { doc, getDoc } from './firebase.js';
-import { DEPARTMENTS, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, UNITS, DEFAULT_UNIT_MULTIPLIERS, isPurchaseRequest } from './config.js';
+import { DEPARTMENTS, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, UNITS, DEFAULT_UNIT_MULTIPLIERS, getUnitConversionFactor, isPurchaseRequest } from './config.js';
 
 // ============================================================================
 // Loading Overlay
@@ -765,23 +765,30 @@ export function showIssueRequisitionModal(req) {
     });
 
     const itemsRowsHtml = (req.items || []).map((item, idx) => {
-        const invItem = inventoryMap[item.name.toLowerCase().trim()];
+        const invItem = inventoryMap[(item.name || '').toLowerCase().trim()];
         const currentStock = invItem ? Number(invItem.stock || 0) : 0;
         const requestedQty = Number(item.quantity || 0);
         const issuedQty = Number(item.issuedQuantity || 0);
         const remainingQty = Math.max(0, requestedQty - issuedQty);
-        const maxIssuable = Math.min(remainingQty, currentStock);
+
+        // Conversion factor from requested unit to base inventory unit
+        const conversionFactor = Number(item.conversionFactor) || (invItem ? getUnitConversionFactor(item.unit, invItem.unit, invItem.packageSize) : 1);
+        const availableInRequestedUnit = conversionFactor > 0 ? Math.floor(currentStock / conversionFactor) : currentStock;
+        const maxIssuable = Math.min(remainingQty, availableInRequestedUnit);
         const defaultIssue = maxIssuable;
-        const isStockLow = currentStock < remainingQty;
+        const isStockLow = availableInRequestedUnit < remainingQty;
+        const packageHint = conversionFactor !== 1 ? `<div class="text-[10px] text-blue-600 dark:text-blue-400 font-medium">1 ${item.unit} = ${conversionFactor} ${invItem?.unit || item.baseUnit || 'units'}</div>` : '';
 
         return `
             <tr class="border-b border-gray-150 dark:border-gray-700/60 hover:bg-gray-50/50 dark:hover:bg-gray-755">
                 <td class="py-3 px-3">
                     <div class="font-medium text-gray-900 dark:text-gray-100">${item.name}</div>
                     <div class="text-xs text-gray-500 dark:text-gray-400">${item.unit || 'Units'}</div>
+                    ${packageHint}
                 </td>
                 <td class="py-3 px-3 text-center font-semibold text-gray-700 dark:text-gray-300">
                     ${requestedQty}
+                    ${conversionFactor !== 1 ? `<div class="text-[10px] text-gray-400">(${requestedQty * conversionFactor} ${invItem?.unit || 'base'})</div>` : ''}
                 </td>
                 <td class="py-3 px-3 text-center text-xs text-gray-500 dark:text-gray-400">
                     ${issuedQty}
@@ -791,8 +798,9 @@ export function showIssueRequisitionModal(req) {
                 </td>
                 <td class="py-3 px-3 text-center">
                     <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${isStockLow ? 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300' : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'}">
-                        ${currentStock} in store
+                        ${currentStock} ${invItem?.unit || 'in store'}
                     </span>
+                    ${conversionFactor !== 1 && currentStock > 0 ? `<div class="text-[10px] text-gray-500 mt-0.5">(${availableInRequestedUnit} ${item.unit} issuable)</div>` : ''}
                     ${!invItem ? '<div class="text-[10px] text-red-500">Not in inventory</div>' : ''}
                 </td>
                 <td class="py-3 px-3 text-right">
@@ -1038,15 +1046,24 @@ export function showReceiveGoodsModal(req) {
         const receivedQty = Number(item.receivedQuantity || 0);
         const remainingQty = Math.max(0, orderedQty - receivedQty);
         const currentPrice = Number(item.price || 0);
+        const conversionFactor = Number(item.conversionFactor) || (DEFAULT_UNIT_MULTIPLIERS[item.unit] || 1);
+        const packageNote = conversionFactor !== 1
+            ? `<div class="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">1 ${item.unit} = ${conversionFactor} ${item.baseUnit || 'units'}</div>`
+            : '';
+        const baseCostNote = conversionFactor !== 1 && currentPrice > 0
+            ? `<div class="text-[10px] text-gray-400 text-right mt-0.5">≈ ${(currentPrice / conversionFactor).toFixed(2)} Birr / ${item.baseUnit || 'unit'}</div>`
+            : '';
 
         return `
             <tr class="border-b border-gray-150 dark:border-gray-700/60 hover:bg-gray-50/50 dark:hover:bg-gray-755">
                 <td class="py-3 px-3">
                     <div class="font-medium text-gray-900 dark:text-gray-100">${item.name}</div>
                     <div class="text-xs text-gray-500 dark:text-gray-400">${item.unit || 'Units'}</div>
+                    ${packageNote}
                 </td>
                 <td class="py-3 px-3 text-center font-semibold text-gray-700 dark:text-gray-300">
                     ${orderedQty}
+                    ${conversionFactor !== 1 ? `<div class="text-[10px] text-gray-400">(${orderedQty * conversionFactor} base)</div>` : ''}
                 </td>
                 <td class="py-3 px-3 text-center text-xs text-gray-500 dark:text-gray-400">
                     ${receivedQty}
@@ -1070,6 +1087,7 @@ export function showReceiveGoodsModal(req) {
                         data-index="${idx}"
                         min="0"
                         value="${currentPrice.toFixed(2)}">
+                    ${baseCostNote}
                 </td>
             </tr>
         `;
@@ -1535,15 +1553,18 @@ export function addRequestItemRow() {
     const container = document.getElementById('items-container');
     if (!container) return;
     const itemRow = document.createElement('div');
-    itemRow.className = 'item-row grid grid-cols-12 gap-2 md:gap-3 items-center bg-gray-50/50 dark:bg-gray-800/40 p-2 rounded-lg border border-gray-100 dark:border-gray-700/50';
+    itemRow.className = 'item-row grid grid-cols-12 gap-2 md:gap-3 items-start bg-gray-50/50 dark:bg-gray-800/40 p-2.5 rounded-lg border border-gray-100 dark:border-gray-700/50';
     itemRow.dataset.basePrice = "0";
     itemRow.dataset.baseUnit = "Each";
     itemRow.dataset.packageSize = "1";
+    itemRow.dataset.conversionFactor = "1";
+    itemRow.dataset.inStore = "false";
+    itemRow.dataset.storeStock = "0";
     itemRow.innerHTML = `
         <div class="col-span-12 md:col-span-4">
             <label class="block md:hidden text-xs font-semibold text-gray-500 mb-1">Item Name</label>
-            <input type="text" class="item-name w-full p-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md transition-colors duration-300 text-sm" list="inventory-items-list" placeholder="Search item..." required>
-            <datalist id="inventory-items-list"></datalist>
+            <input type="text" class="item-name w-full p-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md transition-colors duration-300 text-sm" list="inventory-items-list" placeholder="Search item..." required autocomplete="off">
+            <div class="item-stock-hint text-[11px] mt-1 font-medium hidden"></div>
         </div>
         <div class="col-span-6 md:col-span-2">
             <label class="block md:hidden text-xs font-semibold text-gray-500 mb-1">Quantity</label>
@@ -1554,21 +1575,113 @@ export function addRequestItemRow() {
             <select class="item-unit w-full p-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md transition-colors duration-300 text-sm">
                 ${UNITS.map(u => `<option value="${u}">${u}</option>`).join('')}
             </select>
+            <div class="item-unit-note text-[10px] text-blue-600 dark:text-blue-400 mt-0.5 hidden truncate font-medium"></div>
         </div>
         <div class="col-span-6 md:col-span-2">
             <label class="block md:hidden text-xs font-semibold text-gray-500 mb-1">Unit Price (Birr)</label>
             <input type="number" step="0.01" min="0" value="0.00" class="item-price w-full p-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md transition-colors duration-300 text-sm text-right" required>
         </div>
-        <div class="col-span-4 md:col-span-1 text-right">
+        <div class="col-span-4 md:col-span-1 text-right pt-2">
             <label class="block md:hidden text-xs font-semibold text-gray-500 mb-1">Subtotal</label>
-            <span class="item-subtotal block p-2 text-gray-900 dark:text-gray-100 font-semibold text-sm">Birr 0.00</span>
+            <span class="item-subtotal block p-1 text-gray-900 dark:text-gray-100 font-semibold text-sm">Birr 0.00</span>
         </div>
-        <div class="col-span-2 md:col-span-1 flex justify-center items-center">
+        <div class="col-span-2 md:col-span-1 flex justify-center items-center pt-2">
             <button type="button" class="remove-item-btn p-2 text-red-500 hover:text-red-700 transition-colors" title="Remove row" aria-label="Remove item"><i class="fas fa-trash"></i></button>
         </div>
     `;
     container.appendChild(itemRow);
     populateItemNameDatalist();
+}
+
+/**
+ * Handles typing or selecting an item name from datalist.
+ * Synchronizes store inventory data, stock hints, and pricing.
+ */
+export function handleItemRowNameChange(row) {
+    if (!row) return;
+    const itemNameInput = row.querySelector('.item-name');
+    if (!itemNameInput) return;
+
+    const val = itemNameInput.value.trim();
+    const stockHint = row.querySelector('.item-stock-hint');
+    const unitSelect = row.querySelector('.item-unit');
+    const priceInput = row.querySelector('.item-price');
+    const unitNote = row.querySelector('.item-unit-note');
+
+    const reqTypeInput = document.querySelector('input[name="req-type"]:checked');
+    const isRequisition = !reqTypeInput || reqTypeInput.value === 'Requisition';
+
+    const invItem = (state.inventoryItemsCache || []).find(
+        item => (item.name || '').trim().toLowerCase() === val.toLowerCase()
+    );
+
+    if (invItem) {
+        row.dataset.inStore = "true";
+        row.dataset.storeStock = invItem.stock || 0;
+        row.dataset.basePrice = invItem.price || 0;
+        row.dataset.baseUnit = invItem.unit || 'Each';
+        row.dataset.packageSize = invItem.packageSize || 1;
+
+        if (unitSelect && invItem.unit) {
+            unitSelect.value = invItem.unit;
+        }
+
+        const factor = getUnitConversionFactor(unitSelect ? unitSelect.value : invItem.unit, invItem.unit, invItem.packageSize);
+        row.dataset.conversionFactor = factor;
+
+        if (priceInput) {
+            priceInput.value = (Number(invItem.price || 0) * factor).toFixed(2);
+        }
+
+        if (unitNote) {
+            if (factor !== 1) {
+                unitNote.textContent = `1 ${unitSelect.value} = ${factor} ${invItem.unit}`;
+                unitNote.classList.remove('hidden');
+            } else {
+                unitNote.classList.add('hidden');
+            }
+        }
+
+        if (stockHint) {
+            stockHint.classList.remove('hidden');
+            const stock = Number(invItem.stock || 0);
+            if (stock > 0) {
+                stockHint.className = 'item-stock-hint text-[11px] mt-1 font-medium text-emerald-600 dark:text-emerald-400';
+                stockHint.innerHTML = `<i class="fas fa-check-circle mr-1"></i> In Store: <strong>${stock} ${invItem.unit || 'units'}</strong> available`;
+            } else {
+                stockHint.className = 'item-stock-hint text-[11px] mt-1 font-medium text-red-600 dark:text-red-400';
+                stockHint.innerHTML = `<i class="fas fa-times-circle mr-1"></i> <span class="font-bold">Out of Stock (0 ${invItem.unit || ''})</span> — Restock via Purchase Order`;
+            }
+        }
+    } else {
+        row.dataset.inStore = "false";
+        row.dataset.storeStock = "0";
+        const currentPrice = parseFloat(priceInput ? priceInput.value : 0) || 0;
+        const currentUnit = unitSelect ? unitSelect.value : 'Each';
+        row.dataset.basePrice = currentPrice;
+        row.dataset.baseUnit = currentUnit;
+        row.dataset.packageSize = 1;
+        row.dataset.conversionFactor = 1;
+
+        if (unitNote) unitNote.classList.add('hidden');
+
+        if (stockHint) {
+            if (!val) {
+                stockHint.classList.add('hidden');
+                stockHint.innerHTML = '';
+            } else if (isRequisition) {
+                stockHint.classList.remove('hidden');
+                stockHint.className = 'item-stock-hint text-[11px] mt-1 font-medium text-red-600 dark:text-red-400';
+                stockHint.innerHTML = `<i class="fas fa-exclamation-triangle mr-1"></i> <span class="font-bold">Not in store inventory.</span> Requisitions require existing stock. (Switch to Purchase Order if ordering new items)`;
+            } else {
+                stockHint.classList.remove('hidden');
+                stockHint.className = 'item-stock-hint text-[11px] mt-1 font-medium text-blue-600 dark:text-blue-400';
+                stockHint.innerHTML = `<i class="fas fa-info-circle mr-1"></i> New Item (will be cataloged into store upon delivery receipt)`;
+            }
+        }
+    }
+
+    updateItemSubtotal(row);
 }
 
 /**
@@ -1579,42 +1692,41 @@ export function handleItemRowUnitChange(row) {
     if (!row) return;
     const unitSelect = row.querySelector('.item-unit');
     const priceInput = row.querySelector('.item-price');
+    const unitNote = row.querySelector('.item-unit-note');
     if (!unitSelect || !priceInput) return;
 
     const selectedUnit = unitSelect.value;
-    const baseUnit = row.dataset.baseUnit || 'Each';
+    const baseUnit = row.dataset.baseUnit || selectedUnit;
     const basePrice = parseFloat(row.dataset.basePrice) || 0;
     const packageSize = parseFloat(row.dataset.packageSize) || 1;
 
-    if (basePrice > 0) {
-        let computedPrice = basePrice;
-        if (selectedUnit === baseUnit) {
-            computedPrice = basePrice;
-        } else {
-            const isSelectedPackage = ['Box', 'Bag', 'Pack', 'Carton'].includes(selectedUnit);
-            const isBasePackage = ['Box', 'Bag', 'Pack', 'Carton'].includes(baseUnit);
+    const factor = getUnitConversionFactor(selectedUnit, baseUnit, packageSize);
+    row.dataset.conversionFactor = factor;
 
-            if (isSelectedPackage && !isBasePackage) {
-                const multiplier = packageSize > 1 ? packageSize : (DEFAULT_UNIT_MULTIPLIERS[selectedUnit] || 1);
-                computedPrice = basePrice * multiplier;
-            } else if (!isSelectedPackage && isBasePackage) {
-                const multiplier = packageSize > 1 ? packageSize : (DEFAULT_UNIT_MULTIPLIERS[baseUnit] || 1);
-                computedPrice = multiplier > 0 ? (basePrice / multiplier) : basePrice;
-            } else {
-                const mSelected = DEFAULT_UNIT_MULTIPLIERS[selectedUnit] || 1;
-                const mBase = DEFAULT_UNIT_MULTIPLIERS[baseUnit] || 1;
-                computedPrice = basePrice * (mSelected / mBase);
-            }
-        }
-        priceInput.value = computedPrice.toFixed(2);
+    if (basePrice > 0) {
+        priceInput.value = (basePrice * factor).toFixed(2);
     }
+
+    if (unitNote) {
+        if (factor !== 1) {
+            unitNote.textContent = `1 ${selectedUnit} = ${factor} ${baseUnit}`;
+            unitNote.classList.remove('hidden');
+        } else {
+            unitNote.classList.add('hidden');
+        }
+    }
+
     updateItemSubtotal(row);
 }
 
 export function populateItemNameDatalist() {
     const datalist = document.getElementById('inventory-items-list');
     if (datalist) {
-        datalist.innerHTML = state.inventoryItemsCache.map(item => `<option value="${item.name}"></option>`).join('');
+        datalist.innerHTML = (state.inventoryItemsCache || []).map(item => {
+            const stockInfo = `${item.stock || 0} ${item.unit || ''} in store`;
+            const priceInfo = item.price ? ` — Birr ${Number(item.price).toFixed(2)}` : '';
+            return `<option value="${item.name}">${stockInfo}${priceInfo}</option>`;
+        }).join('');
     }
 }
 

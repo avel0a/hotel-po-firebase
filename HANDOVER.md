@@ -361,4 +361,16 @@ firebase deploy --only "hosting,firestore:rules"
 
 ---
 
+## 15. Unit Conversion Scaling & Requisition Validation (v2.5)
+
+1. **Dynamic Unit & Package Price Scaling:**
+   - Inventory items define a **Base Unit** (e.g., `Kg`, `Liter`, `Each`), **Base Unit Price**, and **Units / Pkg** (`packageSize`, e.g., `25` Kg per Bag/Box).
+   - When requesting or purchasing in a different unit (`Box`, `Bag`, `Pack`, `Carton`), [`handleItemRowUnitChange`](file:///A:/Personal/Abel/hotel-po-firebase-v2/public/js/ui.js) dynamically scales the unit price using [`getUnitConversionFactor`](file:///A:/Personal/Abel/hotel-po-firebase-v2/public/js/config.js) and displays the package conversion note (e.g., `1 Bag = 25 Kg`).
+   - Physical warehouse transactions (`Issue Requisition` & `Receive PO Goods`) automatically convert package quantities back to base units so warehouse stock and weighted-average unit cost remain 100% accurate.
+2. **Department Requisition vs. Purchase Order Validation:**
+   - **Department Requisitions (Flow A):** Enforce that requested items exist in the store inventory with sufficient available stock. Live inline badges warn if an item is Out of Stock or not registered in store, and form submission prevents requesting unstocked/non-existent items.
+   - **Purchase Orders (Flow B):** Allow ordering both existing store stock (to restock) and brand-new uncataloged items from external vendors (which automatically get cataloged into inventory upon delivery receipt).
+
+---
+
 *Handover document maintained for Abel Amare — Hotel PO System.*

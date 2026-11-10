@@ -4,7 +4,7 @@
  */
 
 import state from './state.js';
-import { firebaseConfig, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS } from './config.js';
+import { firebaseConfig, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, DEFAULT_UNIT_MULTIPLIERS, getUnitConversionFactor } from './config.js';
 import {
     signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut,
     sendPasswordResetEmail, initializeApp, deleteApp, getAuth,
@@ -20,7 +20,7 @@ import {
     showReceiveGoodsModal, hideReceiveGoodsModal,
     showRequestDetailsModal, renderReconciliationContent,
     hasPermission, getActiveDepartments, renderPermissionsMatrix, updateUIVisibility
-} from './ui.js?v=2.4';
+} from './ui.js?v=2.5';
 
 // ============================================================================
 // Authentication Actions
@@ -258,12 +258,27 @@ export async function handleRequestFormSubmit(e) {
         showNotification("You don't have permission to submit purchase requests.", true);
         return;
     }
-    const items = Array.from(document.querySelectorAll('#items-container .item-row')).map(row => ({
-        name: row.querySelector('.item-name').value.trim(),
-        quantity: Number(row.querySelector('.item-quantity').value),
-        unit: row.querySelector('.item-unit').value,
-        price: Number(row.querySelector('.item-price').value) || 0
-    })).filter(item => item.name && item.quantity > 0);
+    const items = Array.from(document.querySelectorAll('#items-container .item-row')).map(row => {
+        const name = (row.querySelector('.item-name')?.value || '').trim();
+        const quantity = Number(row.querySelector('.item-quantity')?.value) || 0;
+        const unit = row.querySelector('.item-unit')?.value || 'Each';
+        const price = Number(row.querySelector('.item-price')?.value) || 0;
+        const baseUnit = row.dataset.baseUnit || unit;
+        const packageSize = Number(row.dataset.packageSize) || 1;
+        const conversionFactor = Number(row.dataset.conversionFactor) || 1;
+        const baseQuantity = quantity * conversionFactor;
+
+        return {
+            name,
+            quantity,
+            unit,
+            price,
+            baseUnit,
+            packageSize,
+            conversionFactor,
+            baseQuantity
+        };
+    }).filter(item => item.name && item.quantity > 0);
 
     if (items.length === 0) {
         showNotification("Please add at least one item with a valid name and quantity.", true);
@@ -283,10 +298,37 @@ export async function handleRequestFormSubmit(e) {
 
     const reqTypeInput = document.querySelector('input[name="req-type"]:checked');
     const requestType = reqTypeInput ? reqTypeInput.value : (department === 'Store' || department === 'Purchasing' ? 'Purchase Order' : 'Requisition');
+    const isRequisition = requestType === 'Requisition' || requestType === 'requisition';
 
     if (!department || !priority || !requiredBy) {
         showNotification("Please fill in all required request details.", true);
         return;
+    }
+
+    // Flow A (Department Requisition) Validation: Items MUST exist in store inventory and have available stock
+    if (isRequisition) {
+        for (const item of items) {
+            const invItem = (state.inventoryItemsCache || []).find(
+                i => (i.name || '').trim().toLowerCase() === item.name.toLowerCase()
+            );
+
+            if (!invItem) {
+                showNotification(`Cannot submit Requisition: "${item.name}" is not in hotel store inventory. Requisitions are for existing supplies only. Please submit a Purchase Order instead.`, true);
+                return;
+            }
+
+            const currentStock = Number(invItem.stock || 0);
+            if (currentStock <= 0) {
+                showNotification(`Cannot submit Requisition: "${item.name}" is currently Out of Stock in the store (0 ${invItem.unit || 'units'} available). Please submit a Purchase Order to restock.`, true);
+                return;
+            }
+
+            const requiredBaseQty = item.baseQuantity || (item.quantity * (item.conversionFactor || 1));
+            if (requiredBaseQty > currentStock) {
+                showNotification(`Requested quantity for "${item.name}" (${item.quantity} ${item.unit} = ${requiredBaseQty} ${invItem.unit || ''}) exceeds available store stock (${currentStock} ${invItem.unit || ''}). Please reduce quantity or submit a Purchase Order.`, true);
+                return;
+            }
+        }
     }
 
     const newRequest = {
@@ -651,12 +693,16 @@ export async function handleIssueRequisitionSubmit(e) {
             const invData = invDoc.data();
             const currentStock = Number(invData.stock || 0);
 
-            if (currentStock < toIssue) {
-                showNotification(`Insufficient store stock for "${item.name}". In store: ${currentStock}, attempting to issue: ${toIssue}.`, true);
+            // Convert requested package quantity to physical base inventory units
+            const conversionFactor = Number(item.conversionFactor) || getUnitConversionFactor(item.unit, invData.unit, invData.packageSize);
+            const deductBaseQty = toIssue * conversionFactor;
+
+            if (currentStock < deductBaseQty) {
+                showNotification(`Insufficient store stock for "${item.name}". In store: ${currentStock} ${invData.unit || 'units'}, attempting to issue: ${deductBaseQty} ${invData.unit || 'units'} (${toIssue} ${item.unit}).`, true);
                 return;
             }
 
-            const newStock = currentStock - toIssue;
+            const newStock = currentStock - deductBaseQty;
             inventoryUpdates.push({
                 docRef: doc(state.db, 'inventory', invDoc.id),
                 newStock: newStock
@@ -667,12 +713,12 @@ export async function handleIssueRequisitionSubmit(e) {
                 itemName: item.name,
                 category: invData.category || reqData.department || 'General',
                 type: 'OUT',
-                quantity: toIssue,
+                quantity: deductBaseQty,
                 previousStock: currentStock,
                 newStock: newStock,
                 department: reqData.department || 'Store',
                 recipient: recipient,
-                reason: `Issued for Requisition #${reqId.substring(0, 8)}${issueNotes ? ' - ' + issueNotes : ''}`,
+                reason: `Issued ${toIssue} ${item.unit}${conversionFactor !== 1 ? ` (${deductBaseQty} ${invData.unit || 'units'})` : ''} for Requisition #${reqId.substring(0, 8)}${issueNotes ? ' - ' + issueNotes : ''}`,
                 issuedBy: state.userId,
                 issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
                 timestamp: serverTimestamp()
@@ -821,15 +867,20 @@ export async function handleReceiveGoodsSubmit(e) {
                 currentPrice = Number(invData.price || 0);
                 category = invData.category || category;
 
-                const newStock = currentStock + toReceive;
-                // Weighted average unit cost calculation:
-                const newPrice = currentStock > 0 && actualUnitPrice > 0
-                    ? Number((((currentStock * currentPrice) + (toReceive * actualUnitPrice)) / newStock).toFixed(2))
-                    : (actualUnitPrice > 0 ? actualUnitPrice : currentPrice);
+                const conversionFactor = Number(item.conversionFactor) || getUnitConversionFactor(item.unit, invData.unit, invData.packageSize);
+                const receivedBaseQty = toReceive * conversionFactor;
+                const actualBaseUnitPrice = conversionFactor > 0 ? (actualUnitPrice / conversionFactor) : actualUnitPrice;
+
+                const newStock = currentStock + receivedBaseQty;
+                // Weighted average unit cost calculation in base units:
+                const newPrice = currentStock > 0 && actualBaseUnitPrice > 0
+                    ? Number((((currentStock * currentPrice) + (receivedBaseQty * actualBaseUnitPrice)) / newStock).toFixed(2))
+                    : (actualBaseUnitPrice > 0 ? Number(actualBaseUnitPrice.toFixed(2)) : currentPrice);
 
                 await setDoc(doc(state.db, 'inventory', invDocId), {
                     stock: newStock,
-                    price: newPrice
+                    price: newPrice,
+                    updatedAt: serverTimestamp()
                 }, { merge: true });
 
                 stockMovementsToLog.push({
@@ -837,29 +888,39 @@ export async function handleReceiveGoodsSubmit(e) {
                     itemName: item.name,
                     category: category,
                     type: 'IN',
-                    quantity: toReceive,
+                    quantity: receivedBaseQty,
                     previousStock: currentStock,
                     newStock: newStock,
-                    unitPrice: actualUnitPrice,
+                    unitPrice: Number(actualBaseUnitPrice.toFixed(2)),
                     department: 'Store',
                     supplier: reqData.supplier || 'Vendor',
                     deliveryNote: invoice || '',
                     recipient: 'Store / Warehouse',
-                    reason: `PO Delivery Received (PO #${reqId.substring(0, 8)})${invoice ? ' Inv: ' + invoice : ''}${receiveNotes ? ' - ' + receiveNotes : ''}`,
+                    reason: `PO Delivery Received (PO #${reqId.substring(0, 8)}): ${toReceive} ${item.unit}${conversionFactor !== 1 ? ` (${receivedBaseQty} ${invData.unit || 'units'} @ ${actualBaseUnitPrice.toFixed(2)} Birr/${invData.unit || 'unit'})` : ''}${invoice ? ' Inv: ' + invoice : ''}${receiveNotes ? ' - ' + receiveNotes : ''}`,
                     issuedBy: state.userId,
                     issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
                     timestamp: serverTimestamp()
                 });
             } else {
                 // Create item in inventory if newly introduced
-                const newStock = toReceive;
-                const newPrice = actualUnitPrice > 0 ? actualUnitPrice : (item.price || 0);
+                const conversionFactor = Number(item.conversionFactor) || (DEFAULT_UNIT_MULTIPLIERS[item.unit] || 1);
+                const receivedBaseQty = toReceive * conversionFactor;
+                const effectivePrice = actualUnitPrice > 0 ? actualUnitPrice : (item.price || 0);
+                const actualBaseUnitPrice = conversionFactor > 0 ? (effectivePrice / conversionFactor) : effectivePrice;
+                const baseUnit = item.baseUnit || (conversionFactor > 1 ? 'Each' : item.unit);
+
+                const newStock = receivedBaseQty;
+                const newPrice = Number(actualBaseUnitPrice.toFixed(2));
                 const newInvDoc = await addDoc(collection(state.db, 'inventory'), {
                     name: item.name,
                     category: category,
                     stock: newStock,
                     min: 5,
-                    price: newPrice
+                    unit: baseUnit,
+                    packageSize: item.packageSize || conversionFactor,
+                    price: newPrice,
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp()
                 });
                 invDocId = newInvDoc.id;
 
@@ -868,15 +929,15 @@ export async function handleReceiveGoodsSubmit(e) {
                     itemName: item.name,
                     category: category,
                     type: 'IN',
-                    quantity: toReceive,
+                    quantity: receivedBaseQty,
                     previousStock: 0,
                     newStock: newStock,
-                    unitPrice: actualUnitPrice,
+                    unitPrice: newPrice,
                     department: 'Store',
                     supplier: reqData.supplier || 'Vendor',
                     deliveryNote: invoice || '',
                     recipient: 'Store / Warehouse',
-                    reason: `New Item PO Delivery (PO #${reqId.substring(0, 8)})${invoice ? ' Inv: ' + invoice : ''}`,
+                    reason: `New Item PO Delivery (PO #${reqId.substring(0, 8)}): ${toReceive} ${item.unit}${conversionFactor !== 1 ? ` (${receivedBaseQty} ${baseUnit})` : ''}${invoice ? ' Inv: ' + invoice : ''}`,
                     issuedBy: state.userId,
                     issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
                     timestamp: serverTimestamp()

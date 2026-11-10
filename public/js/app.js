@@ -21,9 +21,9 @@ import {
     showStockLogModal, hideStockLogModal,
     showStockReconciliationModal, hideStockReconciliationModal,
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix,
-    handleItemRowUnitChange, renderNotificationBell, updateSidebarBadges, toggleNotificationDropdown,
+    handleItemRowNameChange, handleItemRowUnitChange, renderNotificationBell, updateSidebarBadges, toggleNotificationDropdown,
     renderStoreOperations
-} from './ui.js?v=2.4';
+} from './ui.js?v=2.5';
 import {
     handleLogin, handleLogout, handleCreateUser,
     handleEditUser, handleSaveUserEdit, handleResetUserPassword, handleDeleteUser,
@@ -34,8 +34,8 @@ import {
     handleAddDepartment, handleDeleteDepartment, handleSaveRolePermissions, handleResetRolePermissions,
     runOneTimeRequestAudit, handleMarkAllNotificationsRead, handleNotificationClick,
     handleBaselineOpeningStock
-} from './actions.js?v=2.4';
-import { initializeFirebase } from './auth.js?v=2.4';
+} from './actions.js?v=2.5';
+import { initializeFirebase } from './auth.js?v=2.5';
 
 // ============================================================================
 // DOM Content Loaded — Wire everything up
@@ -216,6 +216,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (poLabel) poLabel.className = 'flex items-start p-3 border rounded-lg cursor-pointer transition-colors bg-white dark:bg-gray-800 border-emerald-500/60 shadow-sm';
                 if (reqLabel) reqLabel.className = 'flex items-start p-3 border rounded-lg cursor-pointer transition-colors bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 opacity-75';
             }
+            // Immediately re-validate stock hints across all existing item rows
+            document.querySelectorAll('#items-container .item-row').forEach(row => {
+                handleItemRowNameChange(row);
+            });
         });
     });
 
@@ -257,31 +261,17 @@ document.addEventListener('DOMContentLoaded', () => {
             const itemNameInput = e.target.closest('.item-name');
             if (itemNameInput) {
                 const row = itemNameInput.closest('.item-row');
-                const priceInput = row.querySelector('.item-price');
-                const unitSelect = row.querySelector('.item-unit');
-                const selectedItem = state.inventoryItemsCache.find(item => item.name.toLowerCase() === itemNameInput.value.toLowerCase());
-                if (selectedItem) {
-                    row.dataset.basePrice = selectedItem.price || 0;
-                    row.dataset.baseUnit = selectedItem.unit || 'Each';
-                    row.dataset.packageSize = selectedItem.packageSize || 1;
-                    if (unitSelect && selectedItem.unit) {
-                        unitSelect.value = selectedItem.unit;
-                    }
-                    if (priceInput) {
-                        priceInput.value = Number(selectedItem.price || 0).toFixed(2);
-                    }
-                } else {
-                    row.dataset.basePrice = 0;
-                    row.dataset.baseUnit = 'Each';
-                    row.dataset.packageSize = 1;
-                }
-                updateItemSubtotal(row);
+                handleItemRowNameChange(row);
                 return;
             }
 
             const itemPriceInput = e.target.closest('.item-price');
             if (itemPriceInput) {
                 const row = itemPriceInput.closest('.item-row');
+                const customPrice = parseFloat(itemPriceInput.value) || 0;
+                const factor = parseFloat(row.dataset.conversionFactor) || 1;
+                // Keep basePrice synchronized with manual custom pricing
+                row.dataset.basePrice = factor > 0 ? (customPrice / factor) : customPrice;
                 updateItemSubtotal(row);
                 return;
             }
@@ -295,6 +285,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         itemsContainer.addEventListener('change', e => {
+            const itemNameInput = e.target.closest('.item-name');
+            if (itemNameInput) {
+                const row = itemNameInput.closest('.item-row');
+                handleItemRowNameChange(row);
+                return;
+            }
+
             const unitSelect = e.target.closest('.item-unit');
             if (unitSelect) {
                 const row = unitSelect.closest('.item-row');

@@ -61,6 +61,32 @@ export const DEFAULT_UNIT_MULTIPLIERS = {
     'Can': 1
 };
 
+/**
+ * Computes package-to-base conversion factor.
+ * E.g., if base unit is Kg and user selects Box (packageSize 25), returns 25.
+ * If base unit is Box and user selects Each, returns 1/packageSize.
+ */
+export function getUnitConversionFactor(selectedUnit, baseUnit = 'Each', packageSize = 1) {
+    if (!selectedUnit || !baseUnit || selectedUnit === baseUnit) {
+        return 1;
+    }
+    const pkgUnits = ['Box', 'Bag', 'Pack', 'Carton'];
+    const isSelectedPkg = pkgUnits.includes(selectedUnit);
+    const isBasePkg = pkgUnits.includes(baseUnit);
+    const parsedPkg = Number(packageSize) > 1 ? Number(packageSize) : 0;
+
+    if (isSelectedPkg && !isBasePkg) {
+        return parsedPkg > 1 ? parsedPkg : (DEFAULT_UNIT_MULTIPLIERS[selectedUnit] || 1);
+    }
+    if (!isSelectedPkg && isBasePkg) {
+        const factor = parsedPkg > 1 ? parsedPkg : (DEFAULT_UNIT_MULTIPLIERS[baseUnit] || 1);
+        return factor > 0 ? (1 / factor) : 1;
+    }
+    const mSelected = DEFAULT_UNIT_MULTIPLIERS[selectedUnit] || 1;
+    const mBase = DEFAULT_UNIT_MULTIPLIERS[baseUnit] || 1;
+    return mBase > 0 ? (mSelected / mBase) : 1;
+}
+
 /** Request priority levels */
 export const PRIORITIES = ['Normal', 'High', 'Urgent'];
 
