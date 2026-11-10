@@ -18,7 +18,7 @@ import {
     populateReportFilters, applyReportFilters, renderStockMovements,
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix,
     renderNotificationBell, updateSidebarBadges, renderStoreOperations
-} from './ui.js?v=2.6';
+} from './ui.js?v=2.7';
 
 /**
  * Initializes Firebase and sets up auth listener.

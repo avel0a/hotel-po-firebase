@@ -2675,7 +2675,7 @@ export function showStockReconciliationModal() {
                             <strong>Computed Stock</strong> is calculated from the movement audit ledger (<code class="font-mono bg-indigo-100 dark:bg-indigo-900/60 px-1 py-0.5 rounded text-[11px]">Total IN - Total OUT</code>).
                         </p>
                         <p class="text-indigo-800 dark:text-indigo-300">
-                            Items created before movement tracking have 0 movements and show as <em>Needs Baseline</em>. Click <strong>⚡ Auto-Baseline Opening Stock</strong> to automatically record their initial opening balances so your ledger reconciles to 100% Balanced.
+                            Items that had stock before movement tracking began show a variance (System Stock vs Computed Stock). Click <strong>Auto-Reconcile Variances</strong> (or click <strong>Reconcile</strong> / <strong>Set Baseline</strong> on any row) to record the missing opening balance or adjustment in the movement ledger.
                         </p>
                     </div>
                 </div>
@@ -2695,8 +2695,8 @@ export function showStockReconciliationModal() {
                             <input type="text" id="recon-search-input" placeholder="Filter by item or category..." class="w-full pl-8 pr-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-indigo-500 focus:border-indigo-500">
                             <i class="fas fa-search absolute left-2.5 top-2 text-gray-400 text-xs"></i>
                         </div>
-                        <button type="button" id="recon-auto-baseline-btn" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center transition-colors shadow-sm whitespace-nowrap" title="Automatically create opening baseline IN movements for all pre-existing items with 0 movements">
-                            <i class="fas fa-magic mr-1.5"></i> Auto-Baseline Opening Stock
+                        <button type="button" id="recon-auto-baseline-btn" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center transition-colors shadow-sm whitespace-nowrap" title="Automatically record opening balances or reconciling adjustments for all mismatched items">
+                            <i class="fas fa-magic mr-1.5"></i> Auto-Reconcile Variances
                         </button>
                         <button type="button" id="recon-export-csv-btn" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center transition-colors shadow-sm whitespace-nowrap" title="Export Reconciliation Report to CSV">
                             <i class="fas fa-file-csv mr-1.5"></i> Export CSV
@@ -2838,11 +2838,10 @@ export function renderReconciliationContent() {
             ? 'text-gray-500 dark:text-gray-400 font-medium'
             : (r.difference > 0 ? 'text-amber-600 dark:text-amber-400 font-bold' : 'text-red-600 dark:text-red-400 font-bold');
 
-        let badgeHtml = r.isMatch
-            ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-800 dark:bg-green-900/60 dark:text-green-200 border border-green-200 dark:border-green-800"><i class="fas fa-check mr-1 text-[10px]"></i> Balanced</span>`
-            : `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-800 dark:bg-red-900/60 dark:text-red-200 border border-red-200 dark:border-red-800"><i class="fas fa-exclamation-triangle mr-1 text-[10px]"></i> Mismatch (${diffDisplay})</span>`;
-
-        if (!r.isMatch && r.movementCount === 0 && r.systemStock > 0) {
+        let badgeHtml;
+        if (r.isMatch) {
+            badgeHtml = `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-800 dark:bg-green-900/60 dark:text-green-200 border border-green-200 dark:border-green-800"><i class="fas fa-check mr-1 text-[10px]"></i> Balanced</span>`;
+        } else if (r.movementCount === 0 && r.systemStock > 0) {
             badgeHtml = `
                 <div class="inline-flex items-center gap-1.5">
                     <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 border border-amber-200 dark:border-amber-800" title="Item has physical stock but no opening movement records">
@@ -2850,6 +2849,20 @@ export function renderReconciliationContent() {
                     </span>
                     <button data-id="${r.id}" class="set-single-baseline-btn px-2 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-[10px] font-bold transition-colors shadow-sm" title="Create opening balance movement of +${r.systemStock}">
                         Set Baseline
+                    </button>
+                </div>
+            `;
+        } else {
+            const actionTitle = r.difference > 0
+                ? `Record missing IN / opening adjustment (+${r.difference})`
+                : `Record OUT reconciliation adjustment (${r.difference})`;
+            badgeHtml = `
+                <div class="inline-flex items-center gap-1.5">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-800 dark:bg-red-900/60 dark:text-red-200 border border-red-200 dark:border-red-800">
+                        <i class="fas fa-exclamation-triangle mr-1 text-[10px]"></i> Mismatch (${diffDisplay})
+                    </span>
+                    <button data-id="${r.id}" class="set-single-baseline-btn px-2 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-[10px] font-bold transition-colors shadow-sm" title="${actionTitle}">
+                        Reconcile
                     </button>
                 </div>
             `;

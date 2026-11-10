@@ -23,7 +23,7 @@ import {
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix,
     handleItemRowNameChange, handleItemRowUnitChange, renderNotificationBell, updateSidebarBadges, toggleNotificationDropdown,
     renderStoreOperations
-} from './ui.js?v=2.6';
+} from './ui.js?v=2.7';
 import {
     handleLogin, handleLogout, handleCreateUser,
     handleEditUser, handleSaveUserEdit, handleResetUserPassword, handleDeleteUser,
@@ -34,8 +34,8 @@ import {
     handleAddDepartment, handleDeleteDepartment, handleSaveRolePermissions, handleResetRolePermissions,
     runOneTimeRequestAudit, handleMarkAllNotificationsRead, handleNotificationClick,
     handleBaselineOpeningStock
-} from './actions.js?v=2.6';
-import { initializeFirebase } from './auth.js?v=2.6';
+} from './actions.js?v=2.7';
+import { initializeFirebase } from './auth.js?v=2.7';
 
 // ============================================================================
 // DOM Content Loaded — Wire everything up

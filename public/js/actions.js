@@ -18,9 +18,9 @@ import {
     showIssueRequisitionModal, hideIssueRequisitionModal,
     showOrderPOModal, hideOrderPOModal,
     showReceiveGoodsModal, hideReceiveGoodsModal,
-    showRequestDetailsModal, renderReconciliationContent,
+    showRequestDetailsModal, renderReconciliationContent, computeStockReconciliation,
     hasPermission, getActiveDepartments, renderPermissionsMatrix, updateUIVisibility
-} from './ui.js?v=2.6';
+} from './ui.js?v=2.7';
 
 // ============================================================================
 // Authentication Actions
@@ -1903,8 +1903,9 @@ export async function handleNotificationClick(notifId, requestId) {
 }
 
 /**
- * Automatically creates opening baseline IN records for inventory items with 0 stock movements.
- * This resolves pre-existing items that had stock before movement tracking started.
+ * Reconciles variances between physical System Stock and Computed Stock (Total IN - Total OUT).
+ * Works both for pre-existing items with 0 movements (opening baseline) and items that had
+ * prior stock before movement tracking began (recording the exact missing variance).
  */
 export async function handleBaselineOpeningStock(itemId = null) {
     if (!hasPermission(state.userRole, 'manage_inventory')) {
@@ -1912,50 +1913,48 @@ export async function handleBaselineOpeningStock(itemId = null) {
         return;
     }
 
-    const items = state.inventoryItemsCache || [];
-    const movements = state.stockMovementsCache || [];
-
-    const movedKeys = new Set();
-    movements.forEach(m => {
-        if (m.itemId) movedKeys.add(m.itemId);
-        if (m.itemName) movedKeys.add(m.itemName.trim().toLowerCase());
-    });
-
-    let itemsToProcess = [];
-    if (itemId) {
-        const single = items.find(i => i.id === itemId);
-        if (single) itemsToProcess.push(single);
-    } else {
-        itemsToProcess = items.filter(i => {
-            const hasMovements = movedKeys.has(i.id) || movedKeys.has(i.name.trim().toLowerCase());
-            return !hasMovements && Number(i.stock || 0) > 0;
-        });
-    }
+    const reconRows = computeStockReconciliation();
+    const itemsToProcess = itemId
+        ? reconRows.filter(r => r.id === itemId && !r.isMatch)
+        : reconRows.filter(r => !r.isMatch);
 
     if (itemsToProcess.length === 0) {
-        showNotification("All items already have baseline movement records.");
+        showNotification("All inventory items are already 100% balanced!");
         return;
     }
 
     showLoadingOverlay();
     try {
         let count = 0;
-        for (const it of itemsToProcess) {
-            const stockQty = Number(it.stock || 0);
-            if (stockQty <= 0) continue;
+        const invMap = new Map((state.inventoryItemsCache || []).map(i => [i.id, i]));
+
+        for (const r of itemsToProcess) {
+            const diff = Number(r.difference || 0);
+            if (diff === 0) continue;
+
+            const invItem = invMap.get(r.id);
+            const unitLabel = invItem?.unit || 'units';
+            const isIncoming = diff > 0;
+            const adjustQty = Math.abs(diff);
+
+            const reason = r.movementCount === 0
+                ? `Initial Baseline Opening Balance (+${adjustQty} ${unitLabel})`
+                : (isIncoming
+                    ? `Reconciliation Opening Balance Adjustment (+${adjustQty} ${unitLabel})`
+                    : `Physical Count Reconciliation Adjustment (-${adjustQty} ${unitLabel})`);
 
             await addDoc(collection(state.db, 'stock_movements'), {
-                itemId: it.id,
-                itemName: it.name,
-                category: it.category || 'General',
-                type: 'IN',
-                quantity: stockQty,
-                previousStock: 0,
-                newStock: stockQty,
-                unitPrice: Number(it.price || 0),
+                itemId: r.id,
+                itemName: r.name,
+                category: r.category || 'General',
+                type: isIncoming ? 'IN' : 'OUT',
+                quantity: adjustQty,
+                previousStock: r.computedStock,
+                newStock: r.systemStock,
+                unitPrice: Number(r.price || 0),
                 department: 'Store',
-                recipient: 'Store Warehouse Baseline',
-                reason: `Initial Baseline Opening Balance (+${stockQty} ${it.unit || 'units'})`,
+                recipient: 'Store Warehouse Reconciliation',
+                reason,
                 issuedBy: state.userId,
                 issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
                 timestamp: serverTimestamp()
@@ -1963,13 +1962,13 @@ export async function handleBaselineOpeningStock(itemId = null) {
             count++;
         }
 
-        showNotification(`Successfully baselined ${count} item(s)! Reconciliation is now balanced.`);
+        showNotification(`Successfully reconciled ${count} item(s)! Ledger is now 100% balanced.`);
         if (typeof renderReconciliationContent === 'function') {
             renderReconciliationContent();
         }
     } catch (err) {
-        console.error("Error setting baseline opening stock:", err);
-        showNotification("Failed to create opening baseline records.", true);
+        console.error("Error reconciling stock variance:", err);
+        showNotification("Failed to reconcile stock variance.", true);
     } finally {
         hideLoadingOverlay();
     }
