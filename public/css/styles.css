@@ -101,6 +101,27 @@ html.dark .sidebar .user-info-section .font-semibold {
     color: #e2e8f0;
 }
 
+/* Auto-Hiding Full-Screen Drawer Sidebar (Desktop & Mobile) */
+.sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    height: 100dvh;
+    overflow-y: auto;
+    transform: translateX(-105%);
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform 0.25s ease, visibility 0.25s ease;
+    z-index: 60;
+}
+.sidebar.open {
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+    box-shadow: 0 0 0 100vw rgba(0, 0, 0, 0.45);
+}
+
 @media (max-width: 768px) {
     html, body {
         overflow-x: hidden;
@@ -115,27 +136,6 @@ html.dark .sidebar .user-info-section .font-semibold {
     /* Hide animated background SVG on small screens so it never pushes viewport bounds */
     .svg-bg {
         display: none;
-    }
-
-    /* Mobile Drawer Sidebar */
-    .sidebar {
-        position: fixed;
-        top: 0;
-        left: 0;
-        bottom: 0;
-        height: 100dvh;
-        overflow-y: auto;
-        transform: translateX(-105%);
-        visibility: hidden;
-        pointer-events: none;
-        transition: transform 0.25s ease, visibility 0.25s ease;
-        z-index: 60;
-    }
-    .sidebar.open {
-        transform: translateX(0);
-        visibility: visible;
-        pointer-events: auto;
-        box-shadow: 0 0 0 100vw rgba(0, 0, 0, 0.45);
     }
 
     /* Disable hover scale/translate transforms on touch screens to prevent horizontal wiggle */

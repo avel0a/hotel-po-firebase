@@ -23,7 +23,7 @@ import {
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix,
     handleItemRowNameChange, handleItemRowUnitChange, renderNotificationBell, updateSidebarBadges, toggleNotificationDropdown,
     renderStoreOperations
-} from './ui.js?v=2.8';
+} from './ui.js?v=2.9';
 import {
     handleLogin, handleLogout, handleCreateUser,
     handleEditUser, handleSaveUserEdit, handleResetUserPassword, handleDeleteUser,
@@ -34,8 +34,8 @@ import {
     handleAddDepartment, handleDeleteDepartment, handleSaveRolePermissions, handleResetRolePermissions,
     runOneTimeRequestAudit, handleMarkAllNotificationsRead, handleNotificationClick,
     handleBaselineOpeningStock
-} from './actions.js?v=2.8';
-import { initializeFirebase } from './auth.js?v=2.8';
+} from './actions.js?v=2.9';
+import { initializeFirebase } from './auth.js?v=2.9';
 
 // ============================================================================
 // DOM Content Loaded — Wire everything up
@@ -321,14 +321,18 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Mobile menu
+        // Sidebar menu toggle & auto-hide on outside click
         if (e.target.closest('#mobile-menu-open')) {
-            document.querySelector('.sidebar').classList.add('open');
+            document.querySelector('.sidebar').classList.toggle('open');
             return;
         }
         if (e.target.closest('#mobile-menu-close')) {
             document.querySelector('.sidebar').classList.remove('open');
             return;
+        }
+        const openSidebar = document.querySelector('.sidebar.open');
+        if (openSidebar && !e.target.closest('.sidebar')) {
+            openSidebar.classList.remove('open');
         }
 
         // Add item row

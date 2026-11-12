@@ -54,7 +54,7 @@
     </script>
 
     <!-- Custom Styles -->
-    <link rel="stylesheet" href="/css/styles.css?v=2.8">
+    <link rel="stylesheet" href="/css/styles.css?v=2.9">
 </head>
 <body class="font-sans transition-colors duration-300 relative">
     <!-- SVG Blob Background -->
@@ -102,7 +102,7 @@
         <div class="sidebar bg-hotel-primary text-white w-64 flex-shrink-0 transition-colors duration-300">
             <div class="p-4 flex items-center justify-between border-b border-hotel-secondary">
                 <h1 class="text-xl font-bold">Hotel PO System</h1>
-                <button id="mobile-menu-close" class="md:hidden p-2"><i class="fas fa-times"></i></button>
+                <button id="mobile-menu-close" class="p-2 hover:bg-hotel-secondary rounded transition-colors" aria-label="Close menu" title="Close menu"><i class="fas fa-times"></i></button>
             </div>
             <nav class="p-4 flex flex-col h-full">
                 <div class="mb-6">
@@ -135,7 +135,7 @@
             <header class="bg-white shadow-sm transition-colors duration-300">
                 <div class="flex items-center justify-between px-3 py-3 md:p-4 gap-2">
                     <div class="flex items-center min-w-0">
-                        <button id="mobile-menu-open" class="md:hidden mr-3 p-2 flex-shrink-0"><i class="fas fa-bars"></i></button>
+                        <button id="mobile-menu-open" class="mr-3 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 flex-shrink-0 transition-colors" aria-label="Open menu" title="Menu"><i class="fas fa-bars text-lg"></i></button>
                         <h2 id="page-title" class="text-lg md:text-xl font-semibold truncate">Dashboard</h2>
                     </div>
                     <div class="flex items-center space-x-2 md:space-x-3 flex-shrink-0">
@@ -726,6 +726,6 @@
     <div id="notification" class="notification fixed bottom-5 right-5 bg-green-500 text-white py-2 px-4 rounded-lg shadow-lg opacity-0 transform translate-y-10 z-[70]"></div>
 
     <!-- Application Scripts (ES Module) -->
-    <script type="module" src="/js/app.js?v=2.8"></script>
+    <script type="module" src="/js/app.js?v=2.9"></script>
 </body>
 </html>
