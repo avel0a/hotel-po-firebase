@@ -19,8 +19,9 @@ import {
     showOrderPOModal, hideOrderPOModal,
     showReceiveGoodsModal, hideReceiveGoodsModal,
     showRequestDetailsModal, renderReconciliationContent, computeStockReconciliation,
-    hasPermission, getActiveDepartments, renderPermissionsMatrix, updateUIVisibility
-} from './ui.js?v=2.9';
+    hasPermission, getActiveDepartments, renderPermissionsMatrix, updateUIVisibility,
+    findInventoryItem
+} from './ui.js?v=3.0';
 
 // ============================================================================
 // Authentication Actions
@@ -653,16 +654,23 @@ export async function handleIssueRequisitionSubmit(e) {
         const qtyInputs = document.querySelectorAll('#issue-requisition-form .issue-qty-input');
         const issueMap = {};
         let totalIssuedThisTime = 0;
+        let anyInputAvailable = false;
 
         qtyInputs.forEach(input => {
             const idx = parseInt(input.dataset.index, 10);
-            const qty = Math.max(0, parseInt(input.value, 10) || 0);
+            const max = parseFloat(input.dataset.max) || 0;
+            if (max > 0) anyInputAvailable = true;
+            const qty = Math.max(0, parseFloat(input.value) || 0);
             issueMap[idx] = qty;
             totalIssuedThisTime += qty;
         });
 
         if (totalIssuedThisTime <= 0) {
-            showNotification("Please enter at least 1 unit to issue.", true);
+            if (!anyInputAvailable) {
+                showNotification("Cannot issue: All requested items on this requisition currently have 0 store stock available. Please restock the store first.", true);
+            } else {
+                showNotification("Please enter at least 1 unit in the 'Issue Now' column for the item(s) you wish to dispense.", true);
+            }
             return;
         }
 
@@ -676,40 +684,52 @@ export async function handleIssueRequisitionSubmit(e) {
 
             const item = updatedItems[i];
             const remainingNeeded = item.quantity - (item.issuedQuantity || 0);
-            if (toIssue > remainingNeeded) {
+            if (toIssue > (remainingNeeded + 0.0001)) {
                 showNotification(`Cannot issue ${toIssue} for ${item.name}; only ${remainingNeeded} remaining requested.`, true);
                 return;
             }
 
-            // Find item in inventory
-            const invQuery = query(collection(state.db, 'inventory'), where("name", "==", item.name));
-            const invSnap = await getDocs(invQuery);
-            if (invSnap.empty) {
+            // Find item in inventory using robust matching (by ID, exact name, or normalized name)
+            const matchedCacheItem = findInventoryItem(item);
+            let invDocId = matchedCacheItem ? matchedCacheItem.id : null;
+            let invDocSnap = null;
+
+            if (invDocId) {
+                invDocSnap = await getDoc(doc(state.db, 'inventory', invDocId));
+            } else {
+                const invQuery = query(collection(state.db, 'inventory'), where("name", "==", item.name));
+                const invSnap = await getDocs(invQuery);
+                if (!invSnap.empty) {
+                    invDocId = invSnap.docs[0].id;
+                    invDocSnap = invSnap.docs[0];
+                }
+            }
+
+            if (!invDocSnap || !invDocSnap.exists()) {
                 showNotification(`Item "${item.name}" is not registered in hotel inventory database.`, true);
                 return;
             }
 
-            const invDoc = invSnap.docs[0];
-            const invData = invDoc.data();
+            const invData = invDocSnap.data();
             const currentStock = Number(invData.stock || 0);
 
             // Convert requested package quantity to physical base inventory units
             const conversionFactor = Number(item.conversionFactor) || getUnitConversionFactor(item.unit, invData.unit, invData.packageSize);
-            const deductBaseQty = toIssue * conversionFactor;
+            const deductBaseQty = Number((toIssue * conversionFactor).toFixed(3));
 
             if (currentStock < deductBaseQty) {
                 showNotification(`Insufficient store stock for "${item.name}". In store: ${currentStock} ${invData.unit || 'units'}, attempting to issue: ${deductBaseQty} ${invData.unit || 'units'} (${toIssue} ${item.unit}).`, true);
                 return;
             }
 
-            const newStock = currentStock - deductBaseQty;
+            const newStock = Number(Math.max(0, currentStock - deductBaseQty).toFixed(3));
             inventoryUpdates.push({
-                docRef: doc(state.db, 'inventory', invDoc.id),
+                docRef: doc(state.db, 'inventory', invDocId),
                 newStock: newStock
             });
 
             stockMovementsToLog.push({
-                itemId: invDoc.id,
+                itemId: invDocId,
                 itemName: item.name,
                 category: invData.category || reqData.department || 'General',
                 type: 'OUT',
@@ -726,7 +746,7 @@ export async function handleIssueRequisitionSubmit(e) {
 
             updatedItems[i] = {
                 ...item,
-                issuedQuantity: (item.issuedQuantity || 0) + toIssue
+                issuedQuantity: Number(((item.issuedQuantity || 0) + toIssue).toFixed(3))
             };
         }
 
@@ -740,7 +760,7 @@ export async function handleIssueRequisitionSubmit(e) {
             await addDoc(collection(state.db, 'stock_movements'), movement);
         }
 
-        const allFulfilled = updatedItems.every(it => (it.issuedQuantity || 0) >= it.quantity);
+        const allFulfilled = updatedItems.every(it => (it.issuedQuantity || 0) >= (it.quantity - 0.0001));
         const newStatus = allFulfilled ? 'Issued' : 'Partially Issued';
 
         await setDoc(reqDocRef, {
@@ -821,7 +841,7 @@ export async function handleReceiveGoodsSubmit(e) {
 
         qtyInputs.forEach(input => {
             const idx = parseInt(input.dataset.index, 10);
-            const qty = Math.max(0, parseInt(input.value, 10) || 0);
+            const qty = Math.max(0, parseFloat(input.value) || 0);
             receiveMap[idx] = { qty: qty };
             totalReceivedThisTime += qty;
         });
@@ -850,9 +870,22 @@ export async function handleReceiveGoodsSubmit(e) {
             const actualUnitPrice = entry.price;
             const item = updatedItems[i];
 
-            // Look up inventory item
-            const invQuery = query(collection(state.db, 'inventory'), where("name", "==", item.name));
-            const invSnap = await getDocs(invQuery);
+            // Look up inventory item using robust matching, fallback to query
+            const matchedCacheItem = findInventoryItem(item);
+            let invDocId = matchedCacheItem ? matchedCacheItem.id : null;
+            let invDoc = null;
+            if (invDocId) {
+                const snap = await getDoc(doc(state.db, 'inventory', invDocId));
+                if (snap.exists()) invDoc = snap;
+            }
+            if (!invDoc) {
+                const invQuery = query(collection(state.db, 'inventory'), where("name", "==", item.name));
+                const invSnap = await getDocs(invQuery);
+                if (!invSnap.empty) {
+                    invDoc = invSnap.docs[0];
+                    invDocId = invDoc.id;
+                }
+            }
 
             let invDocId;
             let currentStock = 0;

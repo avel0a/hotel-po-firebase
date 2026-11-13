@@ -757,20 +757,39 @@ export function hideReceiveModal() {
 }
 
 // ============================================================================
+// ============================================================================
 // Modals — Flow A: Issue Requisition (Stock Decreases)
 // ============================================================================
+
+/**
+ * Robustly matches an inventory item by ID, normalized name, or fuzzy inclusion.
+ */
+export function findInventoryItem(reqItem) {
+    if (!reqItem) return null;
+    const cache = state.inventoryItemsCache || [];
+    if (reqItem.itemId || reqItem.id) {
+        const byId = cache.find(i => i.id === (reqItem.itemId || reqItem.id));
+        if (byId) return byId;
+    }
+    const norm = (str) => (str || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const target = norm(reqItem.name);
+    if (!target) return null;
+    const exact = cache.find(i => norm(i.name) === target);
+    if (exact) return exact;
+    return cache.find(i => {
+        const iname = norm(i.name);
+        return iname.includes(target) || target.includes(iname);
+    }) || null;
+}
 
 export function showIssueRequisitionModal(req) {
     const modal = document.getElementById('issue-requisition-modal');
     if (!modal) return;
 
-    const inventoryMap = {};
-    (state.inventoryItemsCache || []).forEach(item => {
-        inventoryMap[item.name.toLowerCase().trim()] = item;
-    });
+    let totalIssuableAcrossAll = 0;
 
     const itemsRowsHtml = (req.items || []).map((item, idx) => {
-        const invItem = inventoryMap[(item.name || '').toLowerCase().trim()];
+        const invItem = findInventoryItem(item);
         const currentStock = invItem ? Number(invItem.stock || 0) : 0;
         const requestedQty = Number(item.quantity || 0);
         const issuedQty = Number(item.issuedQuantity || 0);
@@ -778,11 +797,77 @@ export function showIssueRequisitionModal(req) {
 
         // Conversion factor from requested unit to base inventory unit
         const conversionFactor = Number(item.conversionFactor) || (invItem ? getUnitConversionFactor(item.unit, invItem.unit, invItem.packageSize) : 1);
-        const availableInRequestedUnit = conversionFactor > 0 ? Math.floor(currentStock / conversionFactor) : currentStock;
-        const maxIssuable = Math.min(remainingQty, availableInRequestedUnit);
-        const defaultIssue = maxIssuable;
+        const rawAvailable = conversionFactor > 0 ? (currentStock / conversionFactor) : currentStock;
+        const availableInRequestedUnit = rawAvailable >= 1
+            ? Math.floor(rawAvailable)
+            : (rawAvailable > 0 ? Number(rawAvailable.toFixed(2)) : 0);
+
+        let maxIssuable = 0;
+        let isOutOfStock = false;
+        let isAlreadyFulfilled = false;
+
+        if (remainingQty <= 0) {
+            isAlreadyFulfilled = true;
+        } else if (currentStock <= 0) {
+            isOutOfStock = true;
+        } else {
+            maxIssuable = Math.min(remainingQty, availableInRequestedUnit);
+            totalIssuableAcrossAll += maxIssuable;
+        }
+
+        const defaultIssue = maxIssuable > 0 ? maxIssuable : 0;
         const isStockLow = availableInRequestedUnit < remainingQty;
         const packageHint = conversionFactor !== 1 ? `<div class="text-[10px] text-blue-600 dark:text-blue-400 font-medium">1 ${item.unit} = ${conversionFactor} ${invItem?.unit || item.baseUnit || 'units'}</div>` : '';
+
+        // Status badge
+        let stockBadge = '';
+        if (!invItem) {
+            stockBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"><i class="fas fa-exclamation-triangle mr-1"></i> Not in catalog</span>`;
+        } else if (isOutOfStock) {
+            stockBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"><i class="fas fa-times-circle mr-1"></i> Out of Stock (0 ${invItem.unit || ''})</span>`;
+        } else {
+            stockBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${isStockLow ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300' : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'}">
+                ${currentStock} ${invItem.unit || 'in store'}
+            </span>`;
+        }
+
+        // Input control
+        let inputHtml = '';
+        if (isAlreadyFulfilled) {
+            inputHtml = `
+                <div class="text-xs font-semibold text-emerald-600 dark:text-emerald-400 flex items-center justify-end">
+                    <i class="fas fa-check-double mr-1"></i> Fulfilled
+                </div>
+                <input type="hidden" class="issue-qty-input" data-index="${idx}" data-max="0" value="0">
+            `;
+        } else if (isOutOfStock || !invItem || maxIssuable <= 0) {
+            inputHtml = `
+                <div class="flex flex-col items-end">
+                    <input type="number"
+                        class="issue-qty-input w-24 p-1.5 text-sm font-bold border border-gray-200 dark:border-gray-700 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 text-center cursor-not-allowed"
+                        data-index="${idx}"
+                        data-max="0"
+                        min="0"
+                        value="0"
+                        disabled>
+                    <span class="text-[10px] text-red-500 font-medium mt-0.5"><i class="fas fa-ban mr-0.5"></i> 0 available</span>
+                </div>
+            `;
+        } else {
+            inputHtml = `
+                <div class="flex flex-col items-end">
+                    <input type="number"
+                        step="any"
+                        class="issue-qty-input w-24 p-1.5 text-sm font-bold border-2 border-blue-400 dark:border-blue-500 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-center focus:ring-2 focus:ring-blue-500 focus:outline-none shadow-sm"
+                        data-index="${idx}"
+                        data-max="${maxIssuable}"
+                        min="0"
+                        max="${maxIssuable}"
+                        value="${defaultIssue}">
+                    <span class="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">Max: ${maxIssuable} ${item.unit || ''}</span>
+                </div>
+            `;
+        }
 
         return `
             <tr class="border-b border-gray-150 dark:border-gray-700/60 hover:bg-gray-50/50 dark:hover:bg-gray-755">
@@ -802,25 +887,41 @@ export function showIssueRequisitionModal(req) {
                     ${remainingQty}
                 </td>
                 <td class="py-3 px-3 text-center">
-                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${isStockLow ? 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300' : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'}">
-                        ${currentStock} ${invItem?.unit || 'in store'}
-                    </span>
+                    ${stockBadge}
                     ${conversionFactor !== 1 && currentStock > 0 ? `<div class="text-[10px] text-gray-500 mt-0.5">(${availableInRequestedUnit} ${item.unit} issuable)</div>` : ''}
-                    ${!invItem ? '<div class="text-[10px] text-red-500">Not in inventory</div>' : ''}
                 </td>
                 <td class="py-3 px-3 text-right">
-                    <input type="number"
-                        class="issue-qty-input w-24 p-1.5 text-sm font-bold border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-center focus:ring-emerald-500 focus:border-emerald-500"
-                        data-index="${idx}"
-                        data-max="${maxIssuable}"
-                        min="0"
-                        max="${maxIssuable}"
-                        value="${defaultIssue}"
-                        ${maxIssuable <= 0 ? 'disabled' : ''}>
+                    ${inputHtml}
                 </td>
             </tr>
         `;
     }).join('');
+
+    const noStockAlertHtml = totalIssuableAcrossAll <= 0 ? `
+        <div class="p-3.5 bg-amber-50 dark:bg-amber-950/40 rounded-lg border-2 border-amber-300 dark:border-amber-700 text-xs text-amber-900 dark:text-amber-200 flex items-start space-x-2.5">
+            <i class="fas fa-exclamation-triangle text-amber-600 dark:text-amber-400 text-base mt-0.5 shrink-0"></i>
+            <div class="flex-1">
+                <p class="font-bold text-sm text-amber-800 dark:text-amber-300">Cannot Issue Items: Store Stock Is 0</p>
+                <p class="mt-0.5">All requested items on this requisition are currently <strong>out of stock in the store (0 available)</strong> or already fulfilled. Store levels must be restocked before issuance.</p>
+                <p class="mt-1 text-[11px] text-amber-700 dark:text-amber-400">
+                    <strong>Next Steps:</strong> Restock via a <strong>Purchase Order (Restock Store)</strong> or use <strong>Auto-Baseline Opening Stock</strong> in Inventory Reconciliation.
+                </p>
+            </div>
+        </div>
+    ` : '';
+
+    const submitBtnHtml = totalIssuableAcrossAll <= 0 ? `
+        <button type="button" id="issue-req-goto-inventory-btn" class="px-4 py-2 border border-blue-500 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40 text-sm font-semibold rounded-md transition-colors mr-2">
+            <i class="fas fa-boxes mr-1.5"></i> Go to Inventory / Restock
+        </button>
+        <button type="submit" disabled class="px-5 py-2 bg-gray-400 dark:bg-gray-600 cursor-not-allowed text-white text-sm font-semibold rounded-md shadow flex items-center">
+            <i class="fas fa-ban mr-1.5"></i> Cannot Issue (0 Stock)
+        </button>
+    ` : `
+        <button type="submit" class="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-md transition-colors shadow flex items-center">
+            <i class="fas fa-hand-holding-box mr-1.5"></i> Confirm Stock Issue
+        </button>
+    `;
 
     modal.innerHTML = `
         <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-2xl transition-colors duration-300 overflow-hidden mx-4 max-h-[90vh] flex flex-col">
@@ -857,14 +958,18 @@ export function showIssueRequisitionModal(req) {
                     </div>
                 </div>
 
+                ${noStockAlertHtml}
+
                 <div>
                     <div class="flex justify-between items-center mb-2">
                         <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">
                             Requested Items & Quantities to Issue
                         </label>
+                        ${totalIssuableAcrossAll > 0 ? `
                         <button type="button" id="issue-req-fill-max-btn" class="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 font-semibold underline">
                             Issue All Available
                         </button>
+                        ` : ''}
                     </div>
                     <div class="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
                         <table class="min-w-full text-sm">
@@ -907,9 +1012,9 @@ export function showIssueRequisitionModal(req) {
                     </div>
                 </div>
 
-                <div class="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                <div class="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700 items-center">
                     <button type="button" id="cancel-issue-requisition-modal-btn" class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">Cancel</button>
-                    <button type="submit" class="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-md transition-colors shadow">Confirm Stock Issue</button>
+                    ${submitBtnHtml}
                 </div>
             </form>
         </div>
@@ -919,11 +1024,28 @@ export function showIssueRequisitionModal(req) {
     const fillMaxBtn = document.getElementById('issue-req-fill-max-btn');
     if (fillMaxBtn) {
         fillMaxBtn.addEventListener('click', () => {
-            modal.querySelectorAll('.issue-qty-input').forEach(input => {
-                input.value = input.dataset.max || 0;
+            modal.querySelectorAll('.issue-qty-input:not([disabled])').forEach(input => {
+                const max = parseFloat(input.dataset.max) || 0;
+                if (max > 0) {
+                    input.value = max;
+                }
             });
         });
     }
+
+    // Hook up Go to Inventory button if present
+    const gotoInvBtn = document.getElementById('issue-req-goto-inventory-btn');
+    if (gotoInvBtn) {
+        gotoInvBtn.addEventListener('click', () => {
+            hideIssueRequisitionModal();
+            showSection('inventory');
+        });
+    }
+
+    modal.classList.remove('hidden', 'opacity-0', 'invisible');
+    document.getElementById('close-issue-requisition-modal-btn').addEventListener('click', hideIssueRequisitionModal);
+    document.getElementById('cancel-issue-requisition-modal-btn').addEventListener('click', hideIssueRequisitionModal);
+}
 
     modal.classList.remove('hidden', 'opacity-0', 'invisible');
     document.getElementById('close-issue-requisition-modal-btn').addEventListener('click', hideIssueRequisitionModal);
