@@ -21,7 +21,7 @@ import {
     showRequestDetailsModal, renderReconciliationContent, computeStockReconciliation,
     hasPermission, getActiveDepartments, renderPermissionsMatrix, updateUIVisibility,
     findInventoryItem
-} from './ui.js?v=3.0';
+} from './ui.js?v=3.1';
 
 // ============================================================================
 // Authentication Actions
@@ -887,14 +887,11 @@ export async function handleReceiveGoodsSubmit(e) {
                 }
             }
 
-            let invDocId;
             let currentStock = 0;
             let currentPrice = 0;
             let category = reqData.department || 'Store';
 
-            if (!invSnap.empty) {
-                const invDoc = invSnap.docs[0];
-                invDocId = invDoc.id;
+            if (invDoc) {
                 const invData = invDoc.data();
                 currentStock = Number(invData.stock || 0);
                 currentPrice = Number(invData.price || 0);

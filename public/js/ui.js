@@ -1047,11 +1047,6 @@ export function showIssueRequisitionModal(req) {
     document.getElementById('cancel-issue-requisition-modal-btn').addEventListener('click', hideIssueRequisitionModal);
 }
 
-    modal.classList.remove('hidden', 'opacity-0', 'invisible');
-    document.getElementById('close-issue-requisition-modal-btn').addEventListener('click', hideIssueRequisitionModal);
-    document.getElementById('cancel-issue-requisition-modal-btn').addEventListener('click', hideIssueRequisitionModal);
-}
-
 export function hideIssueRequisitionModal() {
     const modal = document.getElementById('issue-requisition-modal');
     if (!modal) return;
