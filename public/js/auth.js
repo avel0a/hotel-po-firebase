@@ -20,7 +20,7 @@ import {
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix,
     renderNotificationBell, updateSidebarBadges, renderStoreOperations,
     renderBackupSectionUI, updateAdminBackupReminder
-} from './ui.js?v=3.3';
+} from './ui.js?v=3.4';
 
 /**
  * Initializes Firebase and sets up auth listener.

@@ -106,15 +106,20 @@ assert.ok(COMMITTED_STATUSES.includes('Received'));
 assert.ok(COMMITTED_STATUSES.includes('Issued'));
 console.log('✓ Role normalization & workflow status checks passed');
 
-// 5. Verify cache-buster consistency (?v=3.3) across entry points
+// 5. Verify cache-buster consistency (?v=3.4) across entry points and Firestore rules
 const indexHtml = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
-assert.ok(indexHtml.includes('/css/styles.css?v=3.3'), 'index.html missing styles.css?v=3.3');
-assert.ok(indexHtml.includes('/js/app.js?v=3.3'), 'index.html missing app.js?v=3.3');
+assert.ok(indexHtml.includes('/css/styles.css?v=3.4'), 'index.html missing styles.css?v=3.4');
+assert.ok(indexHtml.includes('/js/app.js?v=3.4'), 'index.html missing app.js?v=3.4');
 for (const entry of ['app.js', 'auth.js', 'actions.js']) {
     const src = fs.readFileSync(path.join(rootDir, 'public', 'js', entry), 'utf8');
-    assert.ok(src.includes('?v=3.3'), `${entry} missing ?v=3.3 cache-buster`);
+    assert.ok(src.includes('?v=3.4'), `${entry} missing ?v=3.4 cache-buster`);
 }
-console.log('✓ Cache-buster (?v=3.3) consistency check passed');
+const rulesSrc = fs.readFileSync(path.join(rootDir, 'firestore.rules'), 'utf8');
+assert.ok(
+    rulesSrc.includes('allow read: if isAdmin() || (isActiveUser() && settingId != \'backup\');'),
+    'firestore.rules must short-circuit isAdmin() on /settings so backup collection queries succeed'
+);
+console.log('✓ Cache-buster (?v=3.4) & Firestore rule safety checks passed');
 
 // 6. Backup serialization, Web Crypto AES-256-GCM encryption & Cloudinary safety policy
 class MockTimestamp {

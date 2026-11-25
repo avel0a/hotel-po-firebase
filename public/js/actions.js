@@ -32,14 +32,14 @@ import {
     renderApprovals, renderBudgets, applyReportFilters, renderStockMovements,
     updateSidebarBadges, renderStoreOperations, renderBackupSectionUI,
     renderRestorePreview, updateAdminBackupReminder
-} from './ui.js?v=3.3';
+} from './ui.js?v=3.4';
 import {
     BACKUP_COLLECTIONS, BACKUP_PLAIN_FORMAT,
     serializeFirestoreValue, deserializeFirestoreValue,
     encryptBackupPayload, decryptBackupPayload,
     isEncryptedBackupEnvelope, validateBackupDataset, sha256Hex,
     uploadEncryptedBackupToCloudinary
-} from './backup.js?v=3.3';
+} from './backup.js?v=3.4';
 
 /** Internal sentinel error to abort transactions cleanly with user-facing validation feedback. */
 class ValidationError extends Error {
@@ -2562,19 +2562,24 @@ async function fetchEntireCollectionPaginated(colName) {
     const colRef = collection(state.db, colName);
     const docs = [];
     let lastDocSnap = null;
-    while (true) {
-        const q = lastDocSnap
-            ? query(colRef, orderBy(documentId()), startAfter(lastDocSnap), limit(500))
-            : query(colRef, orderBy(documentId()), limit(500));
-        const snap = await getDocs(q);
-        snap.docs.forEach(d => {
-            docs.push({
-                id: d.id,
-                data: serializeFirestoreValue(d.data())
+    try {
+        while (true) {
+            const q = lastDocSnap
+                ? query(colRef, orderBy(documentId()), startAfter(lastDocSnap), limit(500))
+                : query(colRef, orderBy(documentId()), limit(500));
+            const snap = await getDocs(q);
+            snap.docs.forEach(d => {
+                docs.push({
+                    id: d.id,
+                    data: serializeFirestoreValue(d.data())
+                });
             });
-        });
-        if (snap.docs.length < 500) break;
-        lastDocSnap = snap.docs[snap.docs.length - 1];
+            if (snap.docs.length < 500) break;
+            lastDocSnap = snap.docs[snap.docs.length - 1];
+        }
+    } catch (err) {
+        const msg = err?.message || 'Permission or query error';
+        throw new Error(`Backup read failed on "${colName}": ${msg}`);
     }
     return docs;
 }
@@ -2609,29 +2614,34 @@ async function recordBackupAuditLog({ provider, encrypted, bytes, totalDocs, cou
     const nowIso = new Date().toISOString();
     const userEmail = state.auth?.currentUser?.email || 'Admin';
 
-    await setDoc(doc(state.db, 'backups', 'config'), {
-        lastBackupAt: serverTimestamp(),
-        lastBackupAtIso: nowIso,
-        lastBackupBy: userEmail,
-        lastBackupProvider: provider,
-        lastBackupEncrypted: Boolean(encrypted)
-    }, { merge: true });
+    try {
+        await setDoc(doc(state.db, 'backups', 'config'), {
+            lastBackupAt: serverTimestamp(),
+            lastBackupAtIso: nowIso,
+            lastBackupBy: userEmail,
+            lastBackupProvider: provider,
+            lastBackupEncrypted: Boolean(encrypted)
+        }, { merge: true });
 
-    await addDoc(collection(state.db, 'backups'), {
-        type: 'log',
-        provider,
-        encrypted: Boolean(encrypted),
-        bytes: Number(bytes || 0),
-        totalDocs: Number(totalDocs || 0),
-        counts: counts || {},
-        checksumSha256,
-        secureUrl,
-        publicId,
-        createdAt: serverTimestamp(),
-        createdAtIso: nowIso,
-        createdBy: state.userId,
-        createdByEmail: userEmail
-    });
+        await addDoc(collection(state.db, 'backups'), {
+            type: 'log',
+            provider,
+            encrypted: Boolean(encrypted),
+            bytes: Number(bytes || 0),
+            totalDocs: Number(totalDocs || 0),
+            counts: counts || {},
+            checksumSha256,
+            secureUrl,
+            publicId,
+            createdAt: serverTimestamp(),
+            createdAtIso: nowIso,
+            createdBy: state.userId,
+            createdByEmail: userEmail
+        });
+    } catch (err) {
+        console.warn("Could not write backup audit log:", err);
+        throw new Error(`Backup created, but saving backup history to "backups" failed: ${err?.message || err}`);
+    }
 }
 
 export async function handleSaveBackupConfig(e) {

@@ -170,8 +170,8 @@ service cloud.firestore {
     }
 
     match /settings/{settingId} {
-      allow read: if isActiveUser() && settingId != 'backup';
-      allow write: if isActiveUser() && hasPerm('manage_settings', isGM()) && settingId != 'backup';
+      allow read: if isAdmin() || (isActiveUser() && settingId != 'backup');
+      allow write: if isAdmin() || (isActiveUser() && hasPerm('manage_settings', isGM()) && settingId != 'backup');
     }
 
     // backups: sensitive backup metadata & Cloudinary config strictly restricted to Admins
