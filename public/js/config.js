@@ -142,11 +142,76 @@ export function isPurchaseRequest(req) {
            req.department === 'Purchasing';
 }
 
+/** Default hotel white-label configuration */
+export const DEFAULT_HOTEL_SETTINGS = {
+    hotelName: 'Hotel PO System',
+    currency: 'Birr',
+    hotelAddress: '',
+    footerNote: 'Official Hotel Procurement & Store Record'
+};
+
+/** Request statuses considered approved / committed for budgets and purchasing metrics */
+export const COMMITTED_STATUSES = ['Approved', 'Ordered', 'Partially Issued', 'Issued', 'Partially Received', 'Received'];
+
+/** All lifecycle statuses across Flow A and Flow B */
+export const ALL_REQUEST_STATUSES = ['Pending', 'Approved', 'Ordered', 'Partially Issued', 'Issued', 'Partially Received', 'Received', 'Rejected'];
+
 /**
  * Normalizes legacy role aliases (e.g., 'Store Keeper' -> 'Storekeeper').
  */
 export function normalizeRole(role) {
     if (!role) return 'User';
     return role === 'Store Keeper' ? 'Storekeeper' : role;
+}
+
+/**
+ * Escapes HTML special characters to prevent Stored XSS when rendering into innerHTML.
+ * @param {*} value Untrusted text or number
+ * @returns {string} HTML-safe string
+ */
+export function escapeHtml(value) {
+    if (value === null || value === undefined) return '';
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+/**
+ * Formats a CSV cell safely, mitigating CSV formula injection (=, +, -, @, tab, CR)
+ * while preserving ordinary negative numbers.
+ * @param {*} val Cell value
+ * @returns {string} Escaped CSV field
+ */
+export function safeCsvCell(val) {
+    let str = String(val ?? '');
+    if (/^[=+\-@\t\r]/.test(str) && !/^-\d+(\.\d+)?$/.test(str)) {
+        str = `'${str}`;
+    }
+    if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+        return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+}
+
+/**
+ * Rounds quantities cleanly to avoid IEEE-754 floating point drift.
+ */
+export function roundQty(val, decimals = 3) {
+    const n = Number(val);
+    if (!Number.isFinite(n)) return 0;
+    const factor = 10 ** decimals;
+    return Math.round(n * factor) / factor;
+}
+
+/**
+ * Formats currency consistently using the configured hotel currency label.
+ */
+export function formatMoney(amount, currency = 'Birr') {
+    const num = Number(amount);
+    const safeNum = Number.isFinite(num) ? num : 0;
+    return `${currency || 'Birr'} ${safeNum.toFixed(2)}`;
 }
 

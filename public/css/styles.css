@@ -306,14 +306,14 @@ html.dark .dashboard-stat-card:hover {
 .login-card input, .login-card button {
     font-family: 'Montserrat', sans-serif;
 }
-.login-card button {
+.login-card button[type="submit"] {
     background: linear-gradient(90deg, #23272a 0%, #3a506b 100%);
     color: #fff;
     font-weight: 700;
     box-shadow: 0 4px 16px rgba(58,80,107,0.18);
     transition: background 0.2s, transform 0.2s;
 }
-.login-card button:hover {
+.login-card button[type="submit"]:hover {
     background: linear-gradient(90deg, #3a506b 0%, #bfa76f 100%);
     transform: scale(1.04);
 }
@@ -394,7 +394,7 @@ body.dark .svg-bg, html.dark .svg-bg {
     position: fixed;
     bottom: 2rem;
     right: 2rem;
-    z-index: 100;
+    z-index: 40;
     background: linear-gradient(135deg, #23272a 0%, #3a506b 100%);
     color: #fff;
     border-radius: 50%;

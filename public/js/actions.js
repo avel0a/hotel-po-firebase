@@ -4,41 +4,138 @@
  */
 
 import state from './state.js';
-import { firebaseConfig, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, DEFAULT_UNIT_MULTIPLIERS, getUnitConversionFactor } from './config.js';
+import {
+    firebaseConfig, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS,
+    DEFAULT_UNIT_MULTIPLIERS, DEFAULT_HOTEL_SETTINGS, COMMITTED_STATUSES,
+    getUnitConversionFactor, isPurchaseRequest, normalizeRole,
+    safeCsvCell, formatMoney, roundQty
+} from './config.js';
 import {
     signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut,
     sendPasswordResetEmail, initializeApp, deleteApp, getAuth,
     doc, collection, addDoc, setDoc, updateDoc, deleteDoc,
-    query, where, serverTimestamp, getDoc, getDocs, arrayUnion
+    query, where, serverTimestamp, getDoc, getDocs, arrayUnion,
+    runTransaction, writeBatch
 } from './firebase.js';
 import {
     showLoadingOverlay, hideLoadingOverlay, showNotification,
-    showSection, showConfirmModal, addRequestItemRow, updateTotalCost,
+    showSection, showConfirmModal, addRequestItemRow, updateTotalCost, handleItemRowNameChange,
     hideItemModal, showUserModal, hideUserModal, hideIssueModal, hideReceiveModal,
     showIssueRequisitionModal, hideIssueRequisitionModal,
     showOrderPOModal, hideOrderPOModal,
     showReceiveGoodsModal, hideReceiveGoodsModal,
     showRequestDetailsModal, renderReconciliationContent, computeStockReconciliation,
     hasPermission, getActiveDepartments, renderPermissionsMatrix, updateUIVisibility,
-    findInventoryItem
-} from './ui.js?v=3.1';
+    findInventoryItem, getHotelSettings, applyHotelBranding
+} from './ui.js?v=3.2';
+
+/** Internal sentinel error to abort transactions cleanly with user-facing validation feedback. */
+class ValidationError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'ValidationError';
+    }
+}
+
+/** Builds a standardized immutable stock movement ledger entry. */
+function buildMovementEntry({
+    itemId, itemName, category = 'General', type, quantity,
+    previousStock, newStock, unitPrice = null, department = 'Store',
+    recipient = '', supplier = '', deliveryNote = '', reason = ''
+}) {
+    const entry = {
+        itemId,
+        itemName,
+        category,
+        type,
+        quantity: roundQty(quantity),
+        previousStock: roundQty(previousStock),
+        newStock: roundQty(newStock),
+        department,
+        recipient,
+        reason,
+        issuedBy: state.userId,
+        issuedByEmail: state.auth?.currentUser?.email || 'Staff',
+        timestamp: serverTimestamp()
+    };
+    if (unitPrice !== null && unitPrice !== undefined) entry.unitPrice = Number(unitPrice);
+    if (supplier) entry.supplier = supplier;
+    if (deliveryNote) entry.deliveryNote = deliveryNote;
+    return entry;
+}
+
+/**
+ * Resolves an inventory document reference before entering a Firestore transaction
+ * (client Web SDK transactions only permit single-doc transaction.get, not queries).
+ */
+async function resolveInventoryDocRef(item) {
+    const cached = findInventoryItem(item);
+    if (cached && cached.id) {
+        return doc(state.db, 'inventory', cached.id);
+    }
+    const q = query(collection(state.db, 'inventory'), where("name", "==", item.name));
+    const snap = await getDocs(q);
+    if (!snap.empty) {
+        return doc(state.db, 'inventory', snap.docs[0].id);
+    }
+    return null;
+}
 
 // ============================================================================
 // Authentication Actions
 // ============================================================================
+
+function friendlyAuthError(error) {
+    const code = error?.code || '';
+    if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') {
+        return 'Incorrect email or password. Please check your credentials and try again.';
+    }
+    if (code === 'auth/user-disabled') {
+        return 'This account has been disabled. Please contact your System Administrator.';
+    }
+    if (code === 'auth/too-many-requests') {
+        return 'Too many failed attempts. Please wait a few minutes or reset your password.';
+    }
+    if (code === 'auth/invalid-email') {
+        return 'Please enter a valid email address.';
+    }
+    return error?.message || 'Sign-in failed. Please try again.';
+}
 
 /**
  * Handles login form submission.
  */
 export async function handleLogin(e) {
     e.preventDefault();
-    const email = document.getElementById('email').value;
-    const password = document.getElementById('password').value;
+    const email = (document.getElementById('email')?.value || '').trim();
+    const password = document.getElementById('password')?.value || '';
     showLoadingOverlay();
     try {
         await signInWithEmailAndPassword(state.auth, email, password);
     } catch (error) {
-        showNotification(error.message, true);
+        showNotification(friendlyAuthError(error), true);
+    } finally {
+        hideLoadingOverlay();
+    }
+}
+
+/**
+ * Sends a self-service password reset email from the Login screen.
+ */
+export async function handleForgotPassword() {
+    const emailInput = document.getElementById('email');
+    const email = (emailInput?.value || '').trim();
+    if (!email) {
+        showNotification("Enter your email address above first, then click Forgot Password?", true);
+        if (emailInput) emailInput.focus();
+        return;
+    }
+    showLoadingOverlay();
+    try {
+        await sendPasswordResetEmail(state.auth, email);
+        showNotification(`Password reset link sent to ${email} (check spam folder if not in inbox).`);
+    } catch (error) {
+        showNotification(friendlyAuthError(error), true);
     } finally {
         hideLoadingOverlay();
     }
@@ -194,7 +291,8 @@ export function handleResetUserPassword(userId, userEmail) {
 }
 
 /**
- * Deletes a user document from Firestore.
+ * Revokes a staff user's access without deleting the document, preventing
+ * self-registration resurrection on re-login and preserving report/audit history.
  */
 export function handleDeleteUser(userId, userEmail) {
     if (!hasPermission(state.userRole, 'manage_users')) {
@@ -206,14 +304,18 @@ export function handleDeleteUser(userId, userEmail) {
         return;
     }
 
-    showConfirmModal(`Are you sure you want to delete user ${userEmail}? This will revoke their access.`, async () => {
+    showConfirmModal(`Revoke access for ${userEmail}? They will be locked out immediately while preserving audit history.`, async () => {
         showLoadingOverlay();
         try {
-            await deleteDoc(doc(state.db, 'users', userId));
-            showNotification(`User ${userEmail} has been deleted.`);
+            await updateDoc(doc(state.db, 'users', userId), {
+                status: 'Deleted',
+                deletedAt: serverTimestamp(),
+                deletedBy: state.userId
+            });
+            showNotification(`User ${userEmail} access has been revoked.`);
         } catch (error) {
-            console.error("Error deleting user:", error);
-            showNotification("Failed to delete user.", true);
+            console.error("Error revoking user:", error);
+            showNotification("Failed to revoke user access.", true);
         } finally {
             hideLoadingOverlay();
         }
@@ -267,17 +369,21 @@ export async function handleRequestFormSubmit(e) {
         const baseUnit = row.dataset.baseUnit || unit;
         const packageSize = Number(row.dataset.packageSize) || 1;
         const conversionFactor = Number(row.dataset.conversionFactor) || 1;
-        const baseQuantity = quantity * conversionFactor;
+        const baseQuantity = roundQty(quantity * conversionFactor);
+        const matchedInv = findInventoryItem({ name });
 
         return {
-            name,
+            itemId: matchedInv?.id || null,
+            name: matchedInv ? matchedInv.name : name,
             quantity,
             unit,
             price,
             baseUnit,
             packageSize,
             conversionFactor,
-            baseQuantity
+            baseQuantity,
+            issuedQuantity: 0,
+            receivedQuantity: 0
         };
     }).filter(item => item.name && item.quantity > 0);
 
@@ -295,7 +401,7 @@ export async function handleRequestFormSubmit(e) {
     const priority = document.getElementById('req-priority').value;
     const requiredBy = document.getElementById('req-date').value;
     const notes = document.getElementById('req-notes').value.trim();
-    const totalCost = items.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+    const totalCost = roundQty(items.reduce((acc, item) => acc + (item.price * item.quantity), 0), 2);
 
     const reqTypeInput = document.querySelector('input[name="req-type"]:checked');
     const requestType = reqTypeInput ? reqTypeInput.value : (department === 'Store' || department === 'Purchasing' ? 'Purchase Order' : 'Requisition');
@@ -309,9 +415,7 @@ export async function handleRequestFormSubmit(e) {
     // Flow A (Department Requisition) Validation: Items MUST exist in store inventory and have available stock
     if (isRequisition) {
         for (const item of items) {
-            const invItem = (state.inventoryItemsCache || []).find(
-                i => (i.name || '').trim().toLowerCase() === item.name.toLowerCase()
-            );
+            const invItem = findInventoryItem(item);
 
             if (!invItem) {
                 showNotification(`Cannot submit Requisition: "${item.name}" is not in hotel store inventory. Requisitions are for existing supplies only. Please submit a Purchase Order instead.`, true);
@@ -341,6 +445,7 @@ export async function handleRequestFormSubmit(e) {
         createdByEmail: state.auth.currentUser.email
     };
 
+    const curr = getHotelSettings().currency;
     showLoadingOverlay();
     try {
         const docRef = await addDoc(collection(state.db, 'requests'), newRequest);
@@ -351,7 +456,7 @@ export async function handleRequestFormSubmit(e) {
         await createInAppNotification({
             recipientRole: 'General Manager',
             title: isPO ? 'New Purchase Order Submitted' : 'New Department Requisition',
-            message: `${department} (${state.auth.currentUser?.email || 'Staff'}) submitted request #${docRef.id.substring(0, 8)} for ${items.length} item(s) (Total: Birr ${totalCost.toFixed(2)}). Awaiting approval.`,
+            message: `${department} (${state.auth.currentUser?.email || 'Staff'}) submitted request #${docRef.id.substring(0, 8)} for ${items.length} item(s) (Total: ${formatMoney(totalCost, curr)}). Awaiting approval.`,
             type: 'new_request',
             requestId: docRef.id,
             requestType: requestType,
@@ -453,109 +558,118 @@ export async function updateRequestStatus(id, newStatus, approvalNotes = '') {
 }
 
 /**
- * Marks a request as received and updates inventory stock.
+ * Legacy fallback: marks a request as received using an atomic Firestore transaction.
+ * Strictly restricted to Storekeepers / System Administrators with manage_inventory permission.
  */
 export async function markRequestAsReceived(requestId) {
+    if (!hasPermission(state.userRole, 'manage_inventory')) {
+        showNotification("Only Storekeepers or Administrators can fulfill requests and modify store inventory.", true);
+        return;
+    }
+
     showLoadingOverlay();
     try {
         const requestDocRef = doc(state.db, 'requests', requestId);
-        const requestDoc = await getDoc(requestDocRef);
-        if (!requestDoc.exists()) {
+        const preSnap = await getDoc(requestDocRef);
+        if (!preSnap.exists()) {
             showNotification("Request not found.", true);
             return;
         }
-        const requestData = requestDoc.data();
-
-        const isRestockPO = requestData.requestType === 'Purchase Order' ||
-                            requestData.department === 'Store' ||
-                            requestData.isRestockOrder === true;
-
-        // Permissions:
-        // - For Restock PO: Storekeeper, Admin, or the requester (Purchasing)
-        // - For Department Requisition: The department requester, or Storekeeper/Admin dispensing the items
-        const canFulfill = requestData.createdBy === state.userId ||
-                           hasPermission(state.userRole, 'manage_inventory') ||
-                           state.userRole === 'System Administrator';
-
-        if (!canFulfill) {
-            showNotification("You do not have permission to confirm receipt for this request.", true);
-            return;
-        }
-        if (requestData.received) {
-            showNotification("This request has already been marked as received.", true);
-            return;
+        const preData = preSnap.data();
+        const itemRefs = [];
+        for (const item of (preData.items || [])) {
+            itemRefs.push(await resolveInventoryDocRef(item));
         }
 
-        await setDoc(requestDocRef, {
-            received: true,
-            receivedAt: serverTimestamp(),
-            receivedBy: state.userId,
-            receivedByEmail: state.auth?.currentUser?.email || 'N/A'
-        }, { merge: true });
+        const result = await runTransaction(state.db, async (transaction) => {
+            const reqDoc = await transaction.get(requestDocRef);
+            if (!reqDoc.exists()) throw new ValidationError("Request not found.");
+            const requestData = reqDoc.data();
+            if (requestData.received) throw new ValidationError("This request has already been marked as received.");
 
-        // Update inventory stock for each item
-        if (requestData.items && requestData.items.length > 0) {
-            for (const item of requestData.items) {
-                const itemName = item.name;
-                const quantity = Number(item.quantity);
-                const inventoryItemQuery = query(collection(state.db, 'inventory'), where("name", "==", itemName));
-                const inventorySnapshot = await getDocs(inventoryItemQuery);
+            const isRestockPO = isPurchaseRequest(requestData);
+            const items = requestData.items || [];
 
-                if (!inventorySnapshot.empty) {
-                    const inventoryDoc = inventorySnapshot.docs[0];
-                    const currentStock = Number(inventoryDoc.data().stock || 0);
-
-                    let newStock;
-                    let movementType;
-                    let movementReason;
-
-                    if (isRestockPO) {
-                        // RESTOCK PO: Purchased from outside vendor -> INCREASES hotel store stock
-                        newStock = currentStock + quantity;
-                        movementType = 'IN';
-                        movementReason = `Vendor PO Delivery Received (PO: #${requestId.substring(0, 8)})`;
-                    } else {
-                        // DEPARTMENT REQUISITION: Taken from store for department consumption -> DECREASES store stock
-                        newStock = Math.max(0, currentStock - quantity);
-                        movementType = 'OUT';
-                        movementReason = `Issued to ${requestData.department || 'Department'} (Req: #${requestId.substring(0, 8)})`;
-                    }
-
-                    await setDoc(doc(state.db, 'inventory', inventoryDoc.id), { stock: newStock }, { merge: true });
-
-                    // Log Stock movement in audit trail
-                    await addDoc(collection(state.db, 'stock_movements'), {
-                        itemId: inventoryDoc.id,
-                        itemName: itemName,
-                        category: inventoryDoc.data().category || 'General',
-                        type: movementType,
-                        quantity: quantity,
-                        previousStock: currentStock,
-                        newStock: newStock,
-                        department: requestData.department || 'Store',
-                        recipient: requestData.createdByEmail || state.auth?.currentUser?.email || 'Staff',
-                        reason: movementReason,
-                        issuedBy: state.userId,
-                        issuedByEmail: state.auth?.currentUser?.email || 'N/A',
-                        timestamp: serverTimestamp()
-                    });
-
-                    console.log(`Updated ${itemName}: ${movementType} ${quantity} units. New stock: ${newStock}`);
-                } else {
-                    console.warn(`Inventory item "${itemName}" not found in database.`);
-                    showNotification(`Note: "${itemName}" is not registered in inventory.`, true);
+            // Read phase: read all unique inventory docs
+            const uniqueDocs = new Map();
+            for (const ref of itemRefs) {
+                if (ref && !uniqueDocs.has(ref.id)) {
+                    uniqueDocs.set(ref.id, await transaction.get(ref));
                 }
             }
-        }
 
-        if (isRestockPO) {
-            showNotification("PO items received into Store! Store stock levels increased.");
-        } else {
-            showNotification(`Requisition fulfilled! Items issued to ${requestData.department} (store stock decreased).`);
-        }
+            const runningStock = new Map();
+            const invPayloads = new Map();
+            uniqueDocs.forEach((snap, id) => {
+                if (snap.exists()) {
+                    const data = snap.data();
+                    runningStock.set(id, Number(data.stock || 0));
+                    invPayloads.set(id, data);
+                }
+            });
+
+            const missingItems = [];
+            const movements = [];
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                const ref = itemRefs[i];
+                const snapData = ref ? invPayloads.get(ref.id) : null;
+                if (!ref || !snapData) {
+                    missingItems.push(item.name);
+                    continue;
+                }
+                const currentStock = runningStock.get(ref.id) ?? 0;
+                const quantity = roundQty(item.quantity);
+                const newStock = isRestockPO
+                    ? roundQty(currentStock + quantity)
+                    : roundQty(Math.max(0, currentStock - quantity));
+
+                runningStock.set(ref.id, newStock);
+                movements.push(buildMovementEntry({
+                    itemId: ref.id,
+                    itemName: item.name,
+                    category: snapData.category || 'General',
+                    type: isRestockPO ? 'IN' : 'OUT',
+                    quantity,
+                    previousStock: currentStock,
+                    newStock,
+                    department: requestData.department || 'Store',
+                    recipient: requestData.createdByEmail || state.auth?.currentUser?.email || 'Staff',
+                    reason: isRestockPO
+                        ? `Vendor PO Delivery Received (PO: #${requestId.substring(0, 8)})`
+                        : `Issued to ${requestData.department || 'Department'} (Req: #${requestId.substring(0, 8)})`
+                }));
+            }
+
+            // Write phase
+            runningStock.forEach((stockVal, id) => {
+                transaction.set(doc(state.db, 'inventory', id), { stock: stockVal }, { merge: true });
+            });
+            movements.forEach(m => {
+                transaction.set(doc(collection(state.db, 'stock_movements')), m);
+            });
+            transaction.set(requestDocRef, {
+                status: isRestockPO ? 'Received' : 'Issued',
+                received: true,
+                receivedAt: serverTimestamp(),
+                receivedBy: state.userId,
+                receivedByEmail: state.auth?.currentUser?.email || 'N/A'
+            }, { merge: true });
+
+            return { isRestockPO, department: requestData.department, missingItems };
+        });
+
+        result.missingItems.forEach(name => showNotification(`Note: "${name}" is not registered in inventory.`, true));
+        showNotification(result.isRestockPO
+            ? "PO items received into Store! Store stock levels increased."
+            : `Requisition fulfilled! Items issued to ${result.department} (store stock decreased).`);
     } catch (error) {
-        console.error("Error marking as received or updating inventory:", error);
-        showNotification("Failed to update inventory status.", true);
+        if (error instanceof ValidationError) {
+            showNotification(error.message, true);
+        } else {
+            console.error("Error marking as received or updating inventory:", error);
+            showNotification("Failed to update inventory status.", true);
+        }
     } finally {
         hideLoadingOverlay();
     }
@@ -563,13 +677,14 @@ export async function markRequestAsReceived(requestId) {
 
 /**
  * Flow B: Purchasing marks an approved PO as Ordered with supplier.
- * Separation of Duties: Purchasing NEVER edits inventory stock quantities!
+ * Separation of Duties: Only Purchasing or System Admin can place orders; NEVER edits inventory stock.
  */
 export async function handleMarkAsOrdered(e) {
     e.preventDefault();
-    const canOrder = state.userRole === 'Purchasing' || state.userRole === 'System Administrator' || hasPermission(state.userRole, 'create_request');
+    const normRole = normalizeRole(state.userRole);
+    const canOrder = normRole === 'Purchasing' || normRole === 'System Administrator';
     if (!canOrder) {
-        showNotification("You do not have permission to place purchase orders.", true);
+        showNotification("Only Purchasing Officers or Administrators can place vendor purchase orders.", true);
         return;
     }
 
@@ -621,7 +736,8 @@ export async function handleMarkAsOrdered(e) {
 
 /**
  * Flow A: Storekeeper issues items from hotel store to department.
- * Decrements inventory stock and logs an immutable audit trail entry.
+ * Uses an atomic Firestore transaction to decrement stock, update requisition status,
+ * and append immutable Stock Movement audit entries together.
  */
 export async function handleIssueRequisitionSubmit(e) {
     e.preventDefault();
@@ -639,162 +755,179 @@ export async function handleIssueRequisitionSubmit(e) {
         return;
     }
 
+    // Read all inputs for issued quantities before opening transaction
+    const qtyInputs = document.querySelectorAll('#issue-requisition-form .issue-qty-input');
+    const issueMap = {};
+    let totalIssuedThisTime = 0;
+    let anyInputAvailable = false;
+
+    qtyInputs.forEach(input => {
+        const idx = parseInt(input.dataset.index, 10);
+        const max = parseFloat(input.dataset.max) || 0;
+        if (max > 0) anyInputAvailable = true;
+        const qty = Math.max(0, parseFloat(input.value) || 0);
+        issueMap[idx] = qty;
+        totalIssuedThisTime += qty;
+    });
+
+    if (totalIssuedThisTime <= 0) {
+        if (!anyInputAvailable) {
+            showNotification("Cannot issue: All requested items on this requisition currently have 0 store stock available. Please restock the store first.", true);
+        } else {
+            showNotification("Please enter at least 1 unit in the 'Issue Now' column for the item(s) you wish to dispense.", true);
+        }
+        return;
+    }
+
     const reqDocRef = doc(state.db, 'requests', reqId);
     showLoadingOverlay();
     try {
-        const reqSnap = await getDoc(reqDocRef);
-        if (!reqSnap.exists()) {
+        const preSnap = await getDoc(reqDocRef);
+        if (!preSnap.exists()) {
             showNotification("Requisition record not found.", true);
             return;
         }
-        const reqData = reqSnap.data();
-        const items = reqData.items || [];
+        const preItems = preSnap.data().items || [];
+        const resolvedRefs = new Map();
+        for (let i = 0; i < preItems.length; i++) {
+            if ((issueMap[i] || 0) <= 0) continue;
+            const ref = await resolveInventoryDocRef(preItems[i]);
+            if (!ref) {
+                showNotification(`Item "${preItems[i].name}" is not registered in hotel inventory database.`, true);
+                return;
+            }
+            resolvedRefs.set(i, ref);
+        }
 
-        // Read all inputs for issued quantities
-        const qtyInputs = document.querySelectorAll('#issue-requisition-form .issue-qty-input');
-        const issueMap = {};
-        let totalIssuedThisTime = 0;
-        let anyInputAvailable = false;
+        const txResult = await runTransaction(state.db, async (transaction) => {
+            // Read Phase (must precede all writes in Firestore transactions)
+            const reqSnap = await transaction.get(reqDocRef);
+            if (!reqSnap.exists()) throw new ValidationError("Requisition record not found.");
+            const reqData = reqSnap.data();
+            if (reqData.status !== 'Approved' && reqData.status !== 'Partially Issued') {
+                throw new ValidationError(`Requisition status is "${reqData.status}" and cannot be issued.`);
+            }
+            const items = reqData.items || [];
 
-        qtyInputs.forEach(input => {
-            const idx = parseInt(input.dataset.index, 10);
-            const max = parseFloat(input.dataset.max) || 0;
-            if (max > 0) anyInputAvailable = true;
-            const qty = Math.max(0, parseFloat(input.value) || 0);
-            issueMap[idx] = qty;
-            totalIssuedThisTime += qty;
+            const uniqueInvRefs = new Map();
+            resolvedRefs.forEach((ref) => {
+                if (!uniqueInvRefs.has(ref.id)) uniqueInvRefs.set(ref.id, ref);
+            });
+
+            const liveInventory = new Map();
+            for (const [id, ref] of uniqueInvRefs.entries()) {
+                const invSnap = await transaction.get(ref);
+                if (!invSnap.exists()) {
+                    throw new ValidationError("One of the requested inventory items no longer exists.");
+                }
+                const data = invSnap.data();
+                liveInventory.set(id, {
+                    ref,
+                    data,
+                    runningStock: Number(data.stock || 0)
+                });
+            }
+
+            // Validation & Computation Phase
+            const updatedItems = [...items];
+            const movementsToWrite = [];
+
+            for (let i = 0; i < updatedItems.length; i++) {
+                const toIssue = issueMap[i] || 0;
+                if (toIssue <= 0) continue;
+
+                const item = updatedItems[i];
+                const remainingNeeded = roundQty(item.quantity - (item.issuedQuantity || 0));
+                if (toIssue > (remainingNeeded + 0.0001)) {
+                    throw new ValidationError(`Cannot issue ${toIssue} for "${item.name}"; only ${remainingNeeded} remaining requested.`);
+                }
+
+                const ref = resolvedRefs.get(i);
+                const invState = ref ? liveInventory.get(ref.id) : null;
+                if (!invState) {
+                    throw new ValidationError(`Item "${item.name}" is not registered in hotel inventory database.`);
+                }
+
+                const currentStock = invState.runningStock;
+                const invData = invState.data;
+                const conversionFactor = Number(item.conversionFactor) || getUnitConversionFactor(item.unit, invData.unit, invData.packageSize);
+                const deductBaseQty = roundQty(toIssue * conversionFactor);
+
+                if (currentStock < deductBaseQty) {
+                    throw new ValidationError(`Insufficient store stock for "${item.name}". In store: ${currentStock} ${invData.unit || 'units'}, attempting to issue: ${deductBaseQty} ${invData.unit || 'units'} (${toIssue} ${item.unit}).`);
+                }
+
+                const newStock = roundQty(Math.max(0, currentStock - deductBaseQty));
+                invState.runningStock = newStock;
+
+                movementsToWrite.push(buildMovementEntry({
+                    itemId: ref.id,
+                    itemName: item.name,
+                    category: invData.category || reqData.department || 'General',
+                    type: 'OUT',
+                    quantity: deductBaseQty,
+                    previousStock: currentStock,
+                    newStock,
+                    department: reqData.department || 'Store',
+                    recipient,
+                    reason: `Issued ${toIssue} ${item.unit}${conversionFactor !== 1 ? ` (${deductBaseQty} ${invData.unit || 'units'})` : ''} for Requisition #${reqId.substring(0, 8)}${issueNotes ? ' - ' + issueNotes : ''}`
+                }));
+
+                updatedItems[i] = {
+                    ...item,
+                    issuedQuantity: roundQty((item.issuedQuantity || 0) + toIssue)
+                };
+            }
+
+            const allFulfilled = updatedItems.every(it => (it.issuedQuantity || 0) >= (it.quantity - 0.0001));
+            const newStatus = allFulfilled ? 'Issued' : 'Partially Issued';
+
+            // Write Phase (all atomic within one transaction)
+            liveInventory.forEach((invState) => {
+                transaction.set(invState.ref, { stock: invState.runningStock }, { merge: true });
+            });
+            movementsToWrite.forEach((movement) => {
+                transaction.set(doc(collection(state.db, 'stock_movements')), movement);
+            });
+            transaction.set(reqDocRef, {
+                status: newStatus,
+                items: updatedItems,
+                lastIssuedAt: serverTimestamp(),
+                lastIssuedBy: state.userId,
+                lastIssuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
+                lastIssuedRecipient: recipient,
+                issueNotes: issueNotes || '',
+                received: allFulfilled
+            }, { merge: true });
+
+            return { allFulfilled, reqData };
         });
 
-        if (totalIssuedThisTime <= 0) {
-            if (!anyInputAvailable) {
-                showNotification("Cannot issue: All requested items on this requisition currently have 0 store stock available. Please restock the store first.", true);
-            } else {
-                showNotification("Please enter at least 1 unit in the 'Issue Now' column for the item(s) you wish to dispense.", true);
-            }
-            return;
-        }
-
-        const updatedItems = [...items];
-        const stockMovementsToLog = [];
-        const inventoryUpdates = [];
-
-        for (let i = 0; i < updatedItems.length; i++) {
-            const toIssue = issueMap[i] || 0;
-            if (toIssue <= 0) continue;
-
-            const item = updatedItems[i];
-            const remainingNeeded = item.quantity - (item.issuedQuantity || 0);
-            if (toIssue > (remainingNeeded + 0.0001)) {
-                showNotification(`Cannot issue ${toIssue} for ${item.name}; only ${remainingNeeded} remaining requested.`, true);
-                return;
-            }
-
-            // Find item in inventory using robust matching (by ID, exact name, or normalized name)
-            const matchedCacheItem = findInventoryItem(item);
-            let invDocId = matchedCacheItem ? matchedCacheItem.id : null;
-            let invDocSnap = null;
-
-            if (invDocId) {
-                invDocSnap = await getDoc(doc(state.db, 'inventory', invDocId));
-            } else {
-                const invQuery = query(collection(state.db, 'inventory'), where("name", "==", item.name));
-                const invSnap = await getDocs(invQuery);
-                if (!invSnap.empty) {
-                    invDocId = invSnap.docs[0].id;
-                    invDocSnap = invSnap.docs[0];
-                }
-            }
-
-            if (!invDocSnap || !invDocSnap.exists()) {
-                showNotification(`Item "${item.name}" is not registered in hotel inventory database.`, true);
-                return;
-            }
-
-            const invData = invDocSnap.data();
-            const currentStock = Number(invData.stock || 0);
-
-            // Convert requested package quantity to physical base inventory units
-            const conversionFactor = Number(item.conversionFactor) || getUnitConversionFactor(item.unit, invData.unit, invData.packageSize);
-            const deductBaseQty = Number((toIssue * conversionFactor).toFixed(3));
-
-            if (currentStock < deductBaseQty) {
-                showNotification(`Insufficient store stock for "${item.name}". In store: ${currentStock} ${invData.unit || 'units'}, attempting to issue: ${deductBaseQty} ${invData.unit || 'units'} (${toIssue} ${item.unit}).`, true);
-                return;
-            }
-
-            const newStock = Number(Math.max(0, currentStock - deductBaseQty).toFixed(3));
-            inventoryUpdates.push({
-                docRef: doc(state.db, 'inventory', invDocId),
-                newStock: newStock
-            });
-
-            stockMovementsToLog.push({
-                itemId: invDocId,
-                itemName: item.name,
-                category: invData.category || reqData.department || 'General',
-                type: 'OUT',
-                quantity: deductBaseQty,
-                previousStock: currentStock,
-                newStock: newStock,
-                department: reqData.department || 'Store',
-                recipient: recipient,
-                reason: `Issued ${toIssue} ${item.unit}${conversionFactor !== 1 ? ` (${deductBaseQty} ${invData.unit || 'units'})` : ''} for Requisition #${reqId.substring(0, 8)}${issueNotes ? ' - ' + issueNotes : ''}`,
-                issuedBy: state.userId,
-                issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
-                timestamp: serverTimestamp()
-            });
-
-            updatedItems[i] = {
-                ...item,
-                issuedQuantity: Number(((item.issuedQuantity || 0) + toIssue).toFixed(3))
-            };
-        }
-
-        // Execute inventory updates
-        for (const update of inventoryUpdates) {
-            await setDoc(update.docRef, { stock: update.newStock }, { merge: true });
-        }
-
-        // Execute stock movements logging
-        for (const movement of stockMovementsToLog) {
-            await addDoc(collection(state.db, 'stock_movements'), movement);
-        }
-
-        const allFulfilled = updatedItems.every(it => (it.issuedQuantity || 0) >= (it.quantity - 0.0001));
-        const newStatus = allFulfilled ? 'Issued' : 'Partially Issued';
-
-        await setDoc(reqDocRef, {
-            status: newStatus,
-            items: updatedItems,
-            lastIssuedAt: serverTimestamp(),
-            lastIssuedBy: state.userId,
-            lastIssuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
-            lastIssuedRecipient: recipient,
-            issueNotes: issueNotes || '',
-            received: allFulfilled
-        }, { merge: true });
-
         hideIssueRequisitionModal();
-        showNotification(allFulfilled
+        showNotification(txResult.allFulfilled
             ? `Requisition #${reqId.substring(0, 8)} fully issued to ${recipient}! Store stock decreased.`
             : `Requisition #${reqId.substring(0, 8)} partially issued (${totalIssuedThisTime} units). Store stock decreased.`
         );
 
         // Notify original requester that items were issued
-        if (reqData.createdBy) {
+        if (txResult.reqData.createdBy) {
             await createInAppNotification({
-                recipientUserId: reqData.createdBy,
-                title: allFulfilled ? 'Requisition Items Issued' : 'Requisition Partially Issued',
+                recipientUserId: txResult.reqData.createdBy,
+                title: txResult.allFulfilled ? 'Requisition Items Issued' : 'Requisition Partially Issued',
                 message: `${totalIssuedThisTime} unit(s) issued for request #${reqId.substring(0, 8)} to ${recipient}. Available for pickup.`,
                 type: 'issued',
                 requestId: reqId,
                 requestType: 'requisition',
-                department: reqData.department || ''
+                department: txResult.reqData.department || ''
             });
         }
     } catch (error) {
-        console.error("Error issuing requisition:", error);
-        showNotification("Failed to issue requisition items. Check console for details.", true);
+        if (error instanceof ValidationError) {
+            showNotification(error.message, true);
+        } else {
+            console.error("Error issuing requisition:", error);
+            showNotification("Failed to issue requisition items. Check console for details.", true);
+        }
     } finally {
         hideLoadingOverlay();
     }
@@ -802,8 +935,8 @@ export async function handleIssueRequisitionSubmit(e) {
 
 /**
  * Flow B: Storekeeper receives PO goods from supplier into hotel store.
- * Increments inventory stock, recalculates weighted average unit cost,
- * and logs an immutable audit trail entry.
+ * Atomically increments inventory stock, recalculates weighted average unit cost,
+ * updates PO fulfillment status, and logs immutable audit trail entries.
  */
 export async function handleReceiveGoodsSubmit(e) {
     e.preventDefault();
@@ -821,187 +954,220 @@ export async function handleReceiveGoodsSubmit(e) {
         return;
     }
 
+    // Read all inputs for received quantities and actual unit prices
+    const qtyInputs = document.querySelectorAll('#receive-goods-form .receive-goods-qty-input');
+    const priceInputs = document.querySelectorAll('#receive-goods-form .receive-goods-price-input');
+
+    const receiveMap = {};
+    let totalReceivedThisTime = 0;
+
+    qtyInputs.forEach(input => {
+        const idx = parseInt(input.dataset.index, 10);
+        const qty = Math.max(0, parseFloat(input.value) || 0);
+        receiveMap[idx] = { qty };
+        totalReceivedThisTime += qty;
+    });
+
+    priceInputs.forEach(input => {
+        const idx = parseInt(input.dataset.index, 10);
+        const price = Math.max(0, parseFloat(input.value) || 0);
+        if (receiveMap[idx]) {
+            receiveMap[idx].price = price;
+        }
+    });
+
+    if (totalReceivedThisTime <= 0) {
+        showNotification("Please specify at least 1 unit received from supplier.", true);
+        return;
+    }
+
     const reqDocRef = doc(state.db, 'requests', reqId);
     showLoadingOverlay();
     try {
-        const reqSnap = await getDoc(reqDocRef);
-        if (!reqSnap.exists()) {
+        const preSnap = await getDoc(reqDocRef);
+        if (!preSnap.exists()) {
             showNotification("Purchase order record not found.", true);
             return;
         }
-        const reqData = reqSnap.data();
-        const items = reqData.items || [];
-
-        // Read all inputs for received quantities and actual unit prices
-        const qtyInputs = document.querySelectorAll('#receive-goods-form .receive-goods-qty-input');
-        const priceInputs = document.querySelectorAll('#receive-goods-form .receive-goods-price-input');
-
-        const receiveMap = {};
-        let totalReceivedThisTime = 0;
-
-        qtyInputs.forEach(input => {
-            const idx = parseInt(input.dataset.index, 10);
-            const qty = Math.max(0, parseFloat(input.value) || 0);
-            receiveMap[idx] = { qty: qty };
-            totalReceivedThisTime += qty;
-        });
-
-        priceInputs.forEach(input => {
-            const idx = parseInt(input.dataset.index, 10);
-            const price = Math.max(0, parseFloat(input.value) || 0);
-            if (receiveMap[idx]) {
-                receiveMap[idx].price = price;
-            }
-        });
-
-        if (totalReceivedThisTime <= 0) {
-            showNotification("Please specify at least 1 unit received from supplier.", true);
-            return;
+        const preItems = preSnap.data().items || [];
+        const resolvedRefs = new Map();
+        for (let i = 0; i < preItems.length; i++) {
+            if (!receiveMap[i] || receiveMap[i].qty <= 0) continue;
+            const ref = await resolveInventoryDocRef(preItems[i]);
+            if (ref) resolvedRefs.set(i, ref);
         }
 
-        const updatedItems = [...items];
-        const stockMovementsToLog = [];
-
-        for (let i = 0; i < updatedItems.length; i++) {
-            const entry = receiveMap[i];
-            if (!entry || entry.qty <= 0) continue;
-
-            const toReceive = entry.qty;
-            const actualUnitPrice = entry.price;
-            const item = updatedItems[i];
-
-            // Look up inventory item using robust matching, fallback to query
-            const matchedCacheItem = findInventoryItem(item);
-            let invDocId = matchedCacheItem ? matchedCacheItem.id : null;
-            let invDoc = null;
-            if (invDocId) {
-                const snap = await getDoc(doc(state.db, 'inventory', invDocId));
-                if (snap.exists()) invDoc = snap;
+        const txResult = await runTransaction(state.db, async (transaction) => {
+            // Read Phase
+            const reqSnap = await transaction.get(reqDocRef);
+            if (!reqSnap.exists()) throw new ValidationError("Purchase order record not found.");
+            const reqData = reqSnap.data();
+            if (reqData.status !== 'Ordered' && reqData.status !== 'Partially Received') {
+                throw new ValidationError(`Purchase Order status is "${reqData.status}" and cannot receive goods.`);
             }
-            if (!invDoc) {
-                const invQuery = query(collection(state.db, 'inventory'), where("name", "==", item.name));
-                const invSnap = await getDocs(invQuery);
-                if (!invSnap.empty) {
-                    invDoc = invSnap.docs[0];
-                    invDocId = invDoc.id;
+            const items = reqData.items || [];
+
+            const uniqueInvRefs = new Map();
+            resolvedRefs.forEach((ref) => {
+                if (!uniqueInvRefs.has(ref.id)) uniqueInvRefs.set(ref.id, ref);
+            });
+
+            const liveInventory = new Map();
+            for (const [id, ref] of uniqueInvRefs.entries()) {
+                const invSnap = await transaction.get(ref);
+                if (invSnap.exists()) {
+                    const data = invSnap.data();
+                    liveInventory.set(id, {
+                        ref,
+                        isNew: false,
+                        data,
+                        runningStock: Number(data.stock || 0),
+                        runningPrice: Number(data.price || 0)
+                    });
                 }
             }
 
-            let currentStock = 0;
-            let currentPrice = 0;
-            let category = reqData.department || 'Store';
+            // Track newly created items keyed by normalized name in case a PO repeats a new SKU
+            const createdByNormName = new Map();
+            const updatedItems = [...items];
+            const movementsToWrite = [];
 
-            if (invDoc) {
-                const invData = invDoc.data();
-                currentStock = Number(invData.stock || 0);
-                currentPrice = Number(invData.price || 0);
-                category = invData.category || category;
+            for (let i = 0; i < updatedItems.length; i++) {
+                const entry = receiveMap[i];
+                if (!entry || entry.qty <= 0) continue;
 
-                const conversionFactor = Number(item.conversionFactor) || getUnitConversionFactor(item.unit, invData.unit, invData.packageSize);
-                const receivedBaseQty = toReceive * conversionFactor;
-                const actualBaseUnitPrice = conversionFactor > 0 ? (actualUnitPrice / conversionFactor) : actualUnitPrice;
+                const toReceive = entry.qty;
+                const actualUnitPrice = entry.price;
+                const item = updatedItems[i];
+                const normName = (item.name || '').trim().toLowerCase();
 
-                const newStock = currentStock + receivedBaseQty;
-                // Weighted average unit cost calculation in base units:
-                const newPrice = currentStock > 0 && actualBaseUnitPrice > 0
-                    ? Number((((currentStock * currentPrice) + (receivedBaseQty * actualBaseUnitPrice)) / newStock).toFixed(2))
-                    : (actualBaseUnitPrice > 0 ? Number(actualBaseUnitPrice.toFixed(2)) : currentPrice);
+                const existingRef = resolvedRefs.get(i);
+                let invState = existingRef ? liveInventory.get(existingRef.id) : createdByNormName.get(normName);
 
-                await setDoc(doc(state.db, 'inventory', invDocId), {
-                    stock: newStock,
-                    price: newPrice,
-                    updatedAt: serverTimestamp()
-                }, { merge: true });
+                if (invState) {
+                    const invData = invState.data;
+                    const currentStock = invState.runningStock;
+                    const currentPrice = invState.runningPrice;
+                    const category = invData.category || reqData.department || 'Store';
 
-                stockMovementsToLog.push({
-                    itemId: invDocId,
-                    itemName: item.name,
-                    category: category,
-                    type: 'IN',
-                    quantity: receivedBaseQty,
-                    previousStock: currentStock,
-                    newStock: newStock,
-                    unitPrice: Number(actualBaseUnitPrice.toFixed(2)),
-                    department: 'Store',
-                    supplier: reqData.supplier || 'Vendor',
-                    deliveryNote: invoice || '',
-                    recipient: 'Store / Warehouse',
-                    reason: `PO Delivery Received (PO #${reqId.substring(0, 8)}): ${toReceive} ${item.unit}${conversionFactor !== 1 ? ` (${receivedBaseQty} ${invData.unit || 'units'} @ ${actualBaseUnitPrice.toFixed(2)} Birr/${invData.unit || 'unit'})` : ''}${invoice ? ' Inv: ' + invoice : ''}${receiveNotes ? ' - ' + receiveNotes : ''}`,
-                    issuedBy: state.userId,
-                    issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
-                    timestamp: serverTimestamp()
-                });
-            } else {
-                // Create item in inventory if newly introduced
-                const conversionFactor = Number(item.conversionFactor) || (DEFAULT_UNIT_MULTIPLIERS[item.unit] || 1);
-                const receivedBaseQty = toReceive * conversionFactor;
-                const effectivePrice = actualUnitPrice > 0 ? actualUnitPrice : (item.price || 0);
-                const actualBaseUnitPrice = conversionFactor > 0 ? (effectivePrice / conversionFactor) : effectivePrice;
-                const baseUnit = item.baseUnit || (conversionFactor > 1 ? 'Each' : item.unit);
+                    const conversionFactor = Number(item.conversionFactor) || getUnitConversionFactor(item.unit, invData.unit, invData.packageSize);
+                    const receivedBaseQty = roundQty(toReceive * conversionFactor);
+                    const effectivePrice = actualUnitPrice > 0 ? actualUnitPrice : (item.price || 0);
+                    const actualBaseUnitPrice = conversionFactor > 0 ? (effectivePrice / conversionFactor) : effectivePrice;
 
-                const newStock = receivedBaseQty;
-                const newPrice = Number(actualBaseUnitPrice.toFixed(2));
-                const newInvDoc = await addDoc(collection(state.db, 'inventory'), {
-                    name: item.name,
-                    category: category,
-                    stock: newStock,
-                    min: 5,
-                    unit: baseUnit,
-                    packageSize: item.packageSize || conversionFactor,
-                    price: newPrice,
-                    createdAt: serverTimestamp(),
-                    updatedAt: serverTimestamp()
-                });
-                invDocId = newInvDoc.id;
+                    const newStock = roundQty(currentStock + receivedBaseQty);
+                    const newPrice = currentStock > 0 && actualBaseUnitPrice > 0
+                        ? Number((((currentStock * currentPrice) + (receivedBaseQty * actualBaseUnitPrice)) / newStock).toFixed(2))
+                        : (actualBaseUnitPrice > 0 ? Number(actualBaseUnitPrice.toFixed(2)) : currentPrice);
 
-                stockMovementsToLog.push({
-                    itemId: invDocId,
-                    itemName: item.name,
-                    category: category,
-                    type: 'IN',
-                    quantity: receivedBaseQty,
-                    previousStock: 0,
-                    newStock: newStock,
-                    unitPrice: newPrice,
-                    department: 'Store',
-                    supplier: reqData.supplier || 'Vendor',
-                    deliveryNote: invoice || '',
-                    recipient: 'Store / Warehouse',
-                    reason: `New Item PO Delivery (PO #${reqId.substring(0, 8)}): ${toReceive} ${item.unit}${conversionFactor !== 1 ? ` (${receivedBaseQty} ${baseUnit})` : ''}${invoice ? ' Inv: ' + invoice : ''}`,
-                    issuedBy: state.userId,
-                    issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
-                    timestamp: serverTimestamp()
-                });
+                    invState.runningStock = newStock;
+                    invState.runningPrice = newPrice;
+
+                    movementsToWrite.push(buildMovementEntry({
+                        itemId: invState.ref.id,
+                        itemName: item.name,
+                        category,
+                        type: 'IN',
+                        quantity: receivedBaseQty,
+                        previousStock: currentStock,
+                        newStock,
+                        unitPrice: Number(actualBaseUnitPrice.toFixed(2)),
+                        department: 'Store',
+                        supplier: reqData.supplier || 'Vendor',
+                        deliveryNote: invoice || '',
+                        recipient: 'Store / Warehouse',
+                        reason: `PO Delivery Received (PO #${reqId.substring(0, 8)}): ${toReceive} ${item.unit}${conversionFactor !== 1 ? ` (${receivedBaseQty} ${invData.unit || 'units'} @ ${actualBaseUnitPrice.toFixed(2)}/${invData.unit || 'unit'})` : ''}${invoice ? ' Inv: ' + invoice : ''}${receiveNotes ? ' - ' + receiveNotes : ''}`
+                    }));
+                } else {
+                    const conversionFactor = Number(item.conversionFactor) || (DEFAULT_UNIT_MULTIPLIERS[item.unit] || 1);
+                    const receivedBaseQty = roundQty(toReceive * conversionFactor);
+                    const effectivePrice = actualUnitPrice > 0 ? actualUnitPrice : (item.price || 0);
+                    const actualBaseUnitPrice = conversionFactor > 0 ? (effectivePrice / conversionFactor) : effectivePrice;
+                    const baseUnit = item.baseUnit || (conversionFactor > 1 ? 'Each' : item.unit);
+                    const category = reqData.department || 'Store';
+                    const newPrice = Number(actualBaseUnitPrice.toFixed(2));
+                    const newRef = doc(collection(state.db, 'inventory'));
+
+                    invState = {
+                        ref: newRef,
+                        isNew: true,
+                        data: {
+                            name: item.name,
+                            category,
+                            min: 5,
+                            unit: baseUnit,
+                            packageSize: item.packageSize || conversionFactor
+                        },
+                        runningStock: receivedBaseQty,
+                        runningPrice: newPrice
+                    };
+                    liveInventory.set(newRef.id, invState);
+                    createdByNormName.set(normName, invState);
+
+                    movementsToWrite.push(buildMovementEntry({
+                        itemId: newRef.id,
+                        itemName: item.name,
+                        category,
+                        type: 'IN',
+                        quantity: receivedBaseQty,
+                        previousStock: 0,
+                        newStock: receivedBaseQty,
+                        unitPrice: newPrice,
+                        department: 'Store',
+                        supplier: reqData.supplier || 'Vendor',
+                        deliveryNote: invoice || '',
+                        recipient: 'Store / Warehouse',
+                        reason: `New Item PO Delivery (PO #${reqId.substring(0, 8)}): ${toReceive} ${item.unit}${conversionFactor !== 1 ? ` (${receivedBaseQty} ${baseUnit})` : ''}${invoice ? ' Inv: ' + invoice : ''}`
+                    }));
+                }
+
+                updatedItems[i] = {
+                    ...item,
+                    receivedQuantity: roundQty((item.receivedQuantity || 0) + toReceive),
+                    actualPrice: actualUnitPrice > 0 ? actualUnitPrice : item.price
+                };
             }
 
-            updatedItems[i] = {
-                ...item,
-                receivedQuantity: (item.receivedQuantity || 0) + toReceive,
-                actualPrice: actualUnitPrice > 0 ? actualUnitPrice : item.price
-            };
-        }
+            const allFulfilled = updatedItems.every(it => (it.receivedQuantity || 0) >= (it.quantity - 0.0001));
+            const newStatus = allFulfilled ? 'Received' : 'Partially Received';
 
-        // Execute stock movements logging
-        for (const movement of stockMovementsToLog) {
-            await addDoc(collection(state.db, 'stock_movements'), movement);
-        }
+            // Write Phase
+            liveInventory.forEach((invState) => {
+                if (invState.isNew) {
+                    transaction.set(invState.ref, {
+                        ...invState.data,
+                        stock: invState.runningStock,
+                        price: invState.runningPrice,
+                        createdAt: serverTimestamp(),
+                        updatedAt: serverTimestamp()
+                    });
+                } else {
+                    transaction.set(invState.ref, {
+                        stock: invState.runningStock,
+                        price: invState.runningPrice,
+                        updatedAt: serverTimestamp()
+                    }, { merge: true });
+                }
+            });
+            movementsToWrite.forEach((movement) => {
+                transaction.set(doc(collection(state.db, 'stock_movements')), movement);
+            });
+            transaction.set(reqDocRef, {
+                status: newStatus,
+                items: updatedItems,
+                lastReceivedAt: serverTimestamp(),
+                lastReceivedBy: state.userId,
+                lastReceivedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
+                deliveryNote: invoice || '',
+                receiveNotes: receiveNotes || '',
+                received: allFulfilled
+            }, { merge: true });
 
-        const allFulfilled = updatedItems.every(it => (it.receivedQuantity || 0) >= it.quantity);
-        const newStatus = allFulfilled ? 'Received' : 'Partially Received';
-
-        await setDoc(reqDocRef, {
-            status: newStatus,
-            items: updatedItems,
-            lastReceivedAt: serverTimestamp(),
-            lastReceivedBy: state.userId,
-            lastReceivedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
-            deliveryNote: invoice || '',
-            receiveNotes: receiveNotes || '',
-            received: allFulfilled
-        }, { merge: true });
+            return { allFulfilled, reqData };
+        });
 
         hideReceiveGoodsModal();
-        showNotification(allFulfilled
+        showNotification(txResult.allFulfilled
             ? `PO #${reqId.substring(0, 8)} fully received into Store! Stock increased.`
             : `PO #${reqId.substring(0, 8)} partially received (${totalReceivedThisTime} units). Stock increased.`
         );
@@ -1009,7 +1175,7 @@ export async function handleReceiveGoodsSubmit(e) {
         // Notify Purchasing team that items have arrived
         await createInAppNotification({
             recipientRole: 'Purchasing',
-            title: allFulfilled ? 'PO Delivery Fully Received' : 'PO Delivery Partially Received',
+            title: txResult.allFulfilled ? 'PO Delivery Fully Received' : 'PO Delivery Partially Received',
             message: `${totalReceivedThisTime} unit(s) received into store for PO #${reqId.substring(0, 8)}${invoice ? ' (Inv: ' + invoice + ')' : ''}.`,
             type: 'received',
             requestId: reqId,
@@ -1018,32 +1184,38 @@ export async function handleReceiveGoodsSubmit(e) {
         });
 
         // Notify original requester if applicable
-        if (reqData.createdBy && reqData.createdBy !== state.userId) {
+        if (txResult.reqData.createdBy && txResult.reqData.createdBy !== state.userId) {
             await createInAppNotification({
-                recipientUserId: reqData.createdBy,
+                recipientUserId: txResult.reqData.createdBy,
                 title: 'PO Delivery Arrived in Store',
                 message: `Items for purchase order #${reqId.substring(0, 8)} have been received into the store.`,
                 type: 'received',
                 requestId: reqId,
                 requestType: 'purchase',
-                department: reqData.department || ''
+                department: txResult.reqData.department || ''
             });
         }
     } catch (error) {
-        console.error("Error receiving goods into store:", error);
-        showNotification("Failed to receive goods. Check console for details.", true);
+        if (error instanceof ValidationError) {
+            showNotification(error.message, true);
+        } else {
+            console.error("Error receiving goods into store:", error);
+            showNotification("Failed to receive goods. Check console for details.", true);
+        }
     } finally {
         hideLoadingOverlay();
     }
 }
 
 /**
- * Normalizes existing requests in the database to adhere to Flow A / Flow B data model.
+ * Admin-only maintenance helper to normalize legacy request documents.
  */
 export async function runOneTimeRequestAudit() {
+    if (normalizeRole(state.userRole) !== 'System Administrator') return;
     try {
         const snap = await getDocs(collection(state.db, 'requests'));
         let migratedCount = 0;
+        const batch = writeBatch(state.db);
         for (const d of snap.docs) {
             const data = d.data();
             let needsUpdate = false;
@@ -1078,11 +1250,12 @@ export async function runOneTimeRequestAudit() {
             }
 
             if (needsUpdate) {
-                await setDoc(d.ref, update, { merge: true });
+                batch.set(d.ref, update, { merge: true });
                 migratedCount++;
             }
         }
         if (migratedCount > 0) {
+            await batch.commit();
             console.log(`[Audit] Checked ${snap.docs.length} requests, normalized ${migratedCount}.`);
         }
     } catch (err) {
@@ -1095,7 +1268,7 @@ export async function runOneTimeRequestAudit() {
 // ============================================================================
 
 /**
- * Handles inventory item form submission (add or edit).
+ * Handles inventory item form submission (add or edit) using atomic Firestore transactions/batches.
  */
 export async function handleItemFormSubmit(e) {
     e.preventDefault();
@@ -1108,11 +1281,11 @@ export async function handleItemFormSubmit(e) {
     const itemCategory = document.getElementById('item-category').value;
     const itemUnit = document.getElementById('item-unit')?.value || 'Each';
     const itemPackageSize = Number(document.getElementById('item-package-size')?.value) || 1;
-    const itemStock = Number(document.getElementById('item-stock').value);
-    const itemMin = Number(document.getElementById('item-min').value);
+    const itemStock = roundQty(document.getElementById('item-stock').value);
+    const itemMin = roundQty(document.getElementById('item-min').value);
     const itemPrice = Number(document.getElementById('item-price').value);
 
-    if (!itemName || itemStock < 0 || itemMin < 0 || itemPrice < 0) {
+    if (!itemName || isNaN(itemStock) || itemStock < 0 || isNaN(itemMin) || itemMin < 0 || isNaN(itemPrice) || itemPrice < 0) {
         showNotification("Please ensure all fields are valid (name not empty, stock/min/price non-negative).", true);
         return;
     }
@@ -1124,69 +1297,56 @@ export async function handleItemFormSubmit(e) {
         packageSize: itemPackageSize,
         stock: itemStock,
         min: itemMin,
-        price: itemPrice
+        price: itemPrice,
+        updatedAt: serverTimestamp()
     };
 
+    const curr = getHotelSettings().currency;
     showLoadingOverlay();
     try {
         const collectionRef = collection(state.db, 'inventory');
         if (itemId) {
-            const prevStock = Number(document.getElementById('item-prev-stock')?.value ?? itemStock);
-            const prevPrice = Number(document.getElementById('item-prev-price')?.value ?? itemPrice);
             const reasonInput = document.getElementById('item-adjustment-reason')?.value.trim() || '';
-            const stockDiff = itemStock - prevStock;
+            const itemDocRef = doc(collectionRef, itemId);
 
-            // Save the updated item
-            await setDoc(doc(collectionRef, itemId), itemData, { merge: true });
+            // Read live DB stock & price inside transaction to avoid stale DOM drift
+            const { stockDiff, livePrevStock, isIncrease, qtyChanged } = await runTransaction(state.db, async (transaction) => {
+                const liveSnap = await transaction.get(itemDocRef);
+                if (!liveSnap.exists()) throw new ValidationError("Inventory item no longer exists.");
+                const liveData = liveSnap.data();
+                const prevStock = Number(liveData.stock || 0);
+                const prevPrice = Number(liveData.price || 0);
+                const diff = roundQty(itemStock - prevStock);
+                const inc = diff > 0;
+                const changed = Math.abs(diff);
 
-            // If stock quantity was increased or decreased, track in audit trail
-            if (stockDiff !== 0) {
-                const isIncrease = stockDiff > 0;
-                const qtyChanged = Math.abs(stockDiff);
-                const movementType = isIncrease ? 'IN' : 'OUT';
-                const defaultReason = isIncrease
-                    ? `Physical recount / Stock increase (+${qtyChanged} ${itemUnit})`
-                    : `Physical recount / Stock decrease (-${qtyChanged} ${itemUnit})`;
-                const fullReason = reasonInput
-                    ? `Manual Stock Adjustment (${isIncrease ? '+' : '-'}${qtyChanged} ${itemUnit}): ${reasonInput}`
-                    : `Manual Stock Adjustment: ${defaultReason}`;
+                transaction.set(itemDocRef, itemData, { merge: true });
 
-                // Immutable log in stock_movements
-                await addDoc(collection(state.db, 'stock_movements'), {
-                    itemId: itemId,
-                    itemName: itemName,
-                    category: itemCategory,
-                    type: movementType,
-                    quantity: qtyChanged,
-                    previousStock: prevStock,
-                    newStock: itemStock,
-                    unitPrice: itemPrice,
-                    department: 'Store',
-                    recipient: isIncrease ? 'Store Restock / Stock Recount' : 'Store Write-off / Stock Recount',
-                    reason: fullReason,
-                    issuedBy: state.userId,
-                    issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
-                    timestamp: serverTimestamp()
-                });
+                if (changed >= 0.001) {
+                    const defaultReason = inc
+                        ? `Physical recount / Stock increase (+${changed} ${itemUnit})`
+                        : `Physical recount / Stock decrease (-${changed} ${itemUnit})`;
+                    const fullReason = reasonInput
+                        ? `Manual Stock Adjustment (${inc ? '+' : '-'}${changed} ${itemUnit}): ${reasonInput}`
+                        : `Manual Stock Adjustment: ${defaultReason}`;
 
-                // In-app alert to GM for accountability
-                await createInAppNotification({
-                    recipientRole: 'General Manager',
-                    title: `Stock Adjustment: ${itemName}`,
-                    message: `${state.auth?.currentUser?.email || 'Storekeeper'} adjusted stock for "${itemName}": ${prevStock} ➔ ${itemStock} ${itemUnit} (${isIncrease ? '+' : '-'}${qtyChanged}). Reason: ${reasonInput || defaultReason}`,
-                    type: 'info',
-                    requestId: '',
-                    requestType: '',
-                    department: 'Store'
-                });
-
-                showNotification(`Item "${itemName}" updated. Stock adjustment (${isIncrease ? '+' : '-'}${qtyChanged} ${itemUnit}) logged to audit trail!`);
-            } else {
-                // Stock did not change; check if unit price was modified
-                if (prevPrice !== itemPrice) {
-                    await addDoc(collection(state.db, 'stock_movements'), {
-                        itemId: itemId,
-                        itemName: itemName,
+                    transaction.set(doc(collection(state.db, 'stock_movements')), buildMovementEntry({
+                        itemId,
+                        itemName,
+                        category: itemCategory,
+                        type: inc ? 'IN' : 'OUT',
+                        quantity: changed,
+                        previousStock: prevStock,
+                        newStock: itemStock,
+                        unitPrice: itemPrice,
+                        department: 'Store',
+                        recipient: inc ? 'Store Restock / Stock Recount' : 'Store Write-off / Stock Recount',
+                        reason: fullReason
+                    }));
+                } else if (prevPrice !== itemPrice) {
+                    transaction.set(doc(collection(state.db, 'stock_movements')), buildMovementEntry({
+                        itemId,
+                        itemName,
                         category: itemCategory,
                         type: 'IN',
                         quantity: 0,
@@ -1195,29 +1355,46 @@ export async function handleItemFormSubmit(e) {
                         unitPrice: itemPrice,
                         department: 'Store',
                         recipient: 'Store Price Revaluation',
-                        reason: `Unit valuation updated: Birr ${prevPrice.toFixed(2)} ➔ Birr ${itemPrice.toFixed(2)}${reasonInput ? ' (' + reasonInput + ')' : ''}`,
-                        issuedBy: state.userId,
-                        issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
-                        timestamp: serverTimestamp()
-                    });
+                        reason: `Unit valuation updated: ${formatMoney(prevPrice, curr)} ➔ ${formatMoney(itemPrice, curr)}${reasonInput ? ' (' + reasonInput + ')' : ''}`
+                    }));
                 }
+
+                return { stockDiff: diff, livePrevStock: prevStock, isIncrease: inc, qtyChanged: changed };
+            });
+
+            if (qtyChanged >= 0.001) {
+                const defaultReason = isIncrease
+                    ? `Physical recount / Stock increase (+${qtyChanged} ${itemUnit})`
+                    : `Physical recount / Stock decrease (-${qtyChanged} ${itemUnit})`;
+                await createInAppNotification({
+                    recipientRole: 'General Manager',
+                    title: `Stock Adjustment: ${itemName}`,
+                    message: `${state.auth?.currentUser?.email || 'Storekeeper'} adjusted stock for "${itemName}": ${livePrevStock} ➔ ${itemStock} ${itemUnit} (${isIncrease ? '+' : '-'}${qtyChanged}). Reason: ${reasonInput || defaultReason}`,
+                    type: 'info',
+                    requestId: '',
+                    requestType: '',
+                    department: 'Store'
+                });
+                showNotification(`Item "${itemName}" updated. Stock adjustment (${isIncrease ? '+' : '-'}${qtyChanged} ${itemUnit}) logged to audit trail!`);
+            } else {
                 showNotification("Item updated successfully!");
             }
         } else {
+            const existingMatch = findInventoryItem({ name: itemName });
             const q = query(collectionRef, where("name", "==", itemName));
             const querySnapshot = await getDocs(q);
-            if (!querySnapshot.empty) {
-                showNotification(`An inventory item with the name "${itemName}" already exists.`, true);
-                hideLoadingOverlay();
+            if (existingMatch || !querySnapshot.empty) {
+                showNotification(`An inventory item matching "${itemName}" already exists.`, true);
                 return;
             }
-            const newDocRef = await addDoc(collectionRef, itemData);
 
-            // If initial stock was specified > 0, log opening stock movement so reconciliation balances from day 1
+            const batch = writeBatch(state.db);
+            const newDocRef = doc(collectionRef);
+            batch.set(newDocRef, { ...itemData, createdAt: serverTimestamp() });
             if (itemStock > 0) {
-                await addDoc(collection(state.db, 'stock_movements'), {
+                batch.set(doc(collection(state.db, 'stock_movements')), buildMovementEntry({
                     itemId: newDocRef.id,
-                    itemName: itemName,
+                    itemName,
                     category: itemCategory,
                     type: 'IN',
                     quantity: itemStock,
@@ -1226,25 +1403,27 @@ export async function handleItemFormSubmit(e) {
                     unitPrice: itemPrice,
                     department: 'Store',
                     recipient: 'Store Warehouse / Initial Setup',
-                    reason: `Initial Opening Stock Registered (+${itemStock} ${itemUnit})`,
-                    issuedBy: state.userId,
-                    issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
-                    timestamp: serverTimestamp()
-                });
+                    reason: `Initial Opening Stock Registered (+${itemStock} ${itemUnit})`
+                }));
             }
+            await batch.commit();
             showNotification("Item added successfully with initial stock logged!");
         }
         hideItemModal();
     } catch (error) {
-        console.error("Error saving inventory item: ", error);
-        showNotification("Failed to save item.", true);
+        if (error instanceof ValidationError) {
+            showNotification(error.message, true);
+        } else {
+            console.error("Error saving inventory item: ", error);
+            showNotification("Failed to save item.", true);
+        }
     } finally {
         hideLoadingOverlay();
     }
 }
 
 /**
- * Deletes an inventory item after confirmation.
+ * Deletes an inventory item atomically after writing off remaining stock to the ledger.
  */
 export async function deleteInventoryItem(id) {
     if (!hasPermission(state.userRole, 'manage_inventory')) {
@@ -1254,29 +1433,29 @@ export async function deleteInventoryItem(id) {
     showConfirmModal("Are you sure you want to delete this item? This action cannot be undone.", async () => {
         showLoadingOverlay();
         try {
-            const itemToDelete = (state.inventoryItemsCache || []).find(i => i.id === id);
-            const remainingStock = Number(itemToDelete?.stock || 0);
-
-            if (itemToDelete && remainingStock > 0) {
-                await addDoc(collection(state.db, 'stock_movements'), {
-                    itemId: id,
-                    itemName: itemToDelete.name || 'Deleted Item',
-                    category: itemToDelete.category || 'Store',
-                    type: 'OUT',
-                    quantity: remainingStock,
-                    previousStock: remainingStock,
-                    newStock: 0,
-                    unitPrice: itemToDelete.price || 0,
-                    department: 'Store',
-                    recipient: 'Item Deletion / Write-off',
-                    reason: `Item removed from inventory catalog (Stock written off: ${remainingStock} ${itemToDelete.unit || 'units'})`,
-                    issuedBy: state.userId,
-                    issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
-                    timestamp: serverTimestamp()
-                });
-            }
-
-            await deleteDoc(doc(state.db, 'inventory', id));
+            const itemDocRef = doc(state.db, 'inventory', id);
+            await runTransaction(state.db, async (transaction) => {
+                const snap = await transaction.get(itemDocRef);
+                if (!snap.exists()) return;
+                const data = snap.data();
+                const remainingStock = roundQty(data.stock || 0);
+                if (remainingStock > 0) {
+                    transaction.set(doc(collection(state.db, 'stock_movements')), buildMovementEntry({
+                        itemId: id,
+                        itemName: data.name || 'Deleted Item',
+                        category: data.category || 'Store',
+                        type: 'OUT',
+                        quantity: remainingStock,
+                        previousStock: remainingStock,
+                        newStock: 0,
+                        unitPrice: Number(data.price || 0),
+                        department: 'Store',
+                        recipient: 'Item Deletion / Write-off',
+                        reason: `Item removed from inventory catalog (Stock written off: ${remainingStock} ${data.unit || 'units'})`
+                    }));
+                }
+                transaction.delete(itemDocRef);
+            });
             showNotification("Item deleted.");
         } catch (error) {
             console.error("Error deleting item:", error);
@@ -1288,8 +1467,7 @@ export async function deleteInventoryItem(id) {
 }
 
 /**
- * Handles issuing stock out of the store to a department/staff member.
- * Deducts stock from inventory and logs an immutable audit trail entry.
+ * Handles issuing stock out of the store to a department/staff member atomically.
  */
 export async function handleIssueStock(e) {
     e.preventDefault();
@@ -1299,10 +1477,7 @@ export async function handleIssueStock(e) {
     }
 
     const itemId = document.getElementById('issue-item-id').value;
-    const itemName = document.getElementById('issue-item-name').value;
-    const itemCategory = document.getElementById('issue-item-category').value;
-    const currentStock = Number(document.getElementById('issue-current-stock').value);
-    const quantity = Number(document.getElementById('issue-quantity').value);
+    const quantity = roundQty(document.getElementById('issue-quantity').value);
     const department = document.getElementById('issue-department').value;
     const recipient = document.getElementById('issue-recipient').value.trim();
     const reason = document.getElementById('issue-reason').value.trim();
@@ -1311,54 +1486,55 @@ export async function handleIssueStock(e) {
         showNotification("Please specify a valid quantity to issue.", true);
         return;
     }
-
-    if (quantity > currentStock) {
-        showNotification(`Cannot issue ${quantity} units. Only ${currentStock} currently in store!`, true);
-        return;
-    }
-
     if (!department || !recipient) {
         showNotification("Please provide both the receiving department and staff member name.", true);
         return;
     }
 
+    const itemDocRef = doc(state.db, 'inventory', itemId);
     showLoadingOverlay();
     try {
-        const newStock = currentStock - quantity;
-
-        // 1. Deduct stock from inventory
-        await setDoc(doc(state.db, 'inventory', itemId), { stock: newStock }, { merge: true });
-
-        // 2. Record Stock Out movement in audit log
-        await addDoc(collection(state.db, 'stock_movements'), {
-            itemId,
-            itemName,
-            category: itemCategory,
-            type: 'OUT',
-            quantity,
-            previousStock: currentStock,
-            newStock,
-            department,
-            recipient,
-            reason: reason || 'Internal hotel usage',
-            issuedBy: state.userId,
-            issuedByEmail: state.auth?.currentUser?.email || 'N/A',
-            timestamp: serverTimestamp()
+        const { itemName, newStock } = await runTransaction(state.db, async (transaction) => {
+            const snap = await transaction.get(itemDocRef);
+            if (!snap.exists()) throw new ValidationError("Inventory item not found.");
+            const data = snap.data();
+            const liveStock = Number(data.stock || 0);
+            if (quantity > liveStock) {
+                throw new ValidationError(`Cannot issue ${quantity} units. Only ${liveStock} currently in store!`);
+            }
+            const nextStock = roundQty(liveStock - quantity);
+            transaction.set(itemDocRef, { stock: nextStock, updatedAt: serverTimestamp() }, { merge: true });
+            transaction.set(doc(collection(state.db, 'stock_movements')), buildMovementEntry({
+                itemId,
+                itemName: data.name || 'Item',
+                category: data.category || 'General',
+                type: 'OUT',
+                quantity,
+                previousStock: liveStock,
+                newStock: nextStock,
+                department,
+                recipient,
+                reason: reason || 'Internal hotel usage'
+            }));
+            return { itemName: data.name || 'Item', newStock: nextStock };
         });
 
         hideIssueModal();
         showNotification(`Issued ${quantity} units of ${itemName} to ${recipient} (${department}). Remaining stock: ${newStock}`);
     } catch (error) {
-        console.error("Error issuing stock:", error);
-        showNotification("Failed to issue stock. Check console for details.", true);
+        if (error instanceof ValidationError) {
+            showNotification(error.message, true);
+        } else {
+            console.error("Error issuing stock:", error);
+            showNotification("Failed to issue stock. Check console for details.", true);
+        }
     } finally {
         hideLoadingOverlay();
     }
 }
 
 /**
- * Handles receiving stock into the warehouse / store from a supplier.
- * Directly increases inventory stock and logs an immutable audit trail entry.
+ * Handles receiving stock directly into the warehouse atomically.
  */
 export async function handleReceiveStock(e) {
     e.preventDefault();
@@ -1368,67 +1544,75 @@ export async function handleReceiveStock(e) {
     }
 
     const itemId = document.getElementById('receive-item-id').value;
-    const itemName = document.getElementById('receive-item-name').value;
-    const itemCategory = document.getElementById('receive-item-category').value;
-    const currentStock = Number(document.getElementById('receive-current-stock').value || 0);
-    const quantity = Number(document.getElementById('receive-quantity').value);
+    const quantity = roundQty(document.getElementById('receive-quantity').value);
     const unitPrice = Number(document.getElementById('receive-price').value || 0);
     const supplier = document.getElementById('receive-supplier').value.trim();
     const invoice = document.getElementById('receive-invoice').value.trim();
     const notes = document.getElementById('receive-notes').value.trim();
 
-    if (!itemId || !itemName) {
+    if (!itemId) {
         showNotification("Please select a valid inventory item to stock in.", true);
         return;
     }
-
     if (isNaN(quantity) || quantity <= 0) {
         showNotification("Please specify a valid positive quantity received.", true);
         return;
     }
-
     if (!supplier) {
         showNotification("Please provide the supplier or vendor name.", true);
         return;
     }
 
+    let fullReason = `Vendor Delivery: ${supplier}`;
+    if (invoice) fullReason += ` (Ref: ${invoice})`;
+    if (notes) fullReason += ` - ${notes}`;
+
+    const itemDocRef = doc(state.db, 'inventory', itemId);
     showLoadingOverlay();
     try {
-        const newStock = currentStock + quantity;
-        const updateData = { stock: newStock };
-        if (unitPrice > 0) {
-            updateData.price = unitPrice;
-        }
+        const { itemName, newStock } = await runTransaction(state.db, async (transaction) => {
+            const snap = await transaction.get(itemDocRef);
+            if (!snap.exists()) throw new ValidationError("Inventory item not found.");
+            const data = snap.data();
+            const liveStock = Number(data.stock || 0);
+            const livePrice = Number(data.price || 0);
+            const nextStock = roundQty(liveStock + quantity);
 
-        // 1. Update stock in inventory
-        await setDoc(doc(state.db, 'inventory', itemId), updateData, { merge: true });
+            const updateData = { stock: nextStock, updatedAt: serverTimestamp() };
+            if (unitPrice > 0) {
+                updateData.price = liveStock > 0
+                    ? Number((((liveStock * livePrice) + (quantity * unitPrice)) / nextStock).toFixed(2))
+                    : Number(unitPrice.toFixed(2));
+            }
 
-        // 2. Log Stock In movement in audit trail
-        let fullReason = `Vendor Delivery: ${supplier}`;
-        if (invoice) fullReason += ` (Ref: ${invoice})`;
-        if (notes) fullReason += ` - ${notes}`;
-
-        await addDoc(collection(state.db, 'stock_movements'), {
-            itemId,
-            itemName,
-            category: itemCategory || 'General',
-            type: 'IN',
-            quantity,
-            previousStock: currentStock,
-            newStock,
-            department: 'Store',
-            recipient: 'Store / Warehouse',
-            reason: fullReason,
-            issuedBy: state.userId,
-            issuedByEmail: state.auth?.currentUser?.email || 'N/A',
-            timestamp: serverTimestamp()
+            transaction.set(itemDocRef, updateData, { merge: true });
+            transaction.set(doc(collection(state.db, 'stock_movements')), buildMovementEntry({
+                itemId,
+                itemName: data.name || 'Item',
+                category: data.category || 'General',
+                type: 'IN',
+                quantity,
+                previousStock: liveStock,
+                newStock: nextStock,
+                unitPrice: unitPrice > 0 ? Number(unitPrice.toFixed(2)) : livePrice,
+                department: 'Store',
+                supplier,
+                deliveryNote: invoice || '',
+                recipient: 'Store / Warehouse',
+                reason: fullReason
+            }));
+            return { itemName: data.name || 'Item', newStock: nextStock };
         });
 
         hideReceiveModal();
         showNotification(`Successfully received ${quantity} units of ${itemName} into Store! New stock: ${newStock}`);
     } catch (error) {
-        console.error("Error receiving stock:", error);
-        showNotification("Failed to receive stock into store. Check console for details.", true);
+        if (error instanceof ValidationError) {
+            showNotification(error.message, true);
+        } else {
+            console.error("Error receiving stock:", error);
+            showNotification("Failed to receive stock into store. Check console for details.", true);
+        }
     } finally {
         hideLoadingOverlay();
     }
@@ -1457,14 +1641,16 @@ export async function handleSetBudget() {
 
     const budgetId = `${monthInput}_${department.replace(/\s+/g, '-')}`;
 
+    const curr = getHotelSettings().currency;
     showLoadingOverlay();
     try {
         await setDoc(doc(state.db, 'budgets', budgetId), {
             department, month: monthInput, amount,
             year: monthInput.split('-')[0],
-            month_num: monthInput.split('-')[1]
-        });
-        showNotification(`Budget for ${department} for ${monthInput} set to Birr ${amount.toFixed(2)}.`, false);
+            month_num: monthInput.split('-')[1],
+            updatedAt: serverTimestamp()
+        }, { merge: true });
+        showNotification(`Budget for ${department} for ${monthInput} set to ${formatMoney(amount, curr)}.`, false);
     } catch (error) {
         console.error("Error setting budget:", error);
         showNotification("Failed to set budget.", true);
@@ -1474,11 +1660,21 @@ export async function handleSetBudget() {
 }
 
 // ============================================================================
-// PDF Report Download
+// PDF & CSV Exports (+ Individual Official PO / Requisition Vouchers)
 // ============================================================================
 
+function getJsPdfInstance() {
+    if (window.jspdf && window.jspdf.jsPDF && window.jspdf_autotable && !window.jspdf.jsPDF.API.autoTable) {
+        window.jspdf.jsPDF.API.autoTable = window.jspdf_autotable;
+    }
+    if (!window.jspdf || !window.jspdf.jsPDF || !window.jspdf.jsPDF.API.autoTable) {
+        return null;
+    }
+    return window.jspdf.jsPDF;
+}
+
 /**
- * Generates and downloads a PDF report.
+ * Generates and downloads a branded PDF summary report.
  */
 export async function downloadReportPdf() {
     if (!hasPermission(state.userRole, 'view_reports')) {
@@ -1487,30 +1683,26 @@ export async function downloadReportPdf() {
     }
     try {
         showNotification("Generating PDF...", false);
-        if (window.jspdf && window.jspdf.jsPDF && window.jspdf_autotable && !window.jspdf.jsPDF.API.autoTable) {
-            window.jspdf.jsPDF.API.autoTable = window.jspdf_autotable;
-        }
-        if (!window.jspdf || !window.jspdf.jsPDF || !window.jspdf.jsPDF.API.autoTable) {
-            console.error("jsPDF or autotable not loaded", window.jspdf);
+        const jsPDF = getJsPdfInstance();
+        if (!jsPDF) {
             showNotification("PDF generation libraries not loaded. Please refresh the page.", true);
             return;
         }
 
-        const jsPDF = window.jspdf.jsPDF;
+        const cfg = getHotelSettings();
         const pdf = new jsPDF('p', 'mm', 'a4');
         const margin = 15;
-        const headerHeight = 25;
+        const headerHeight = 26;
         const pageWidth = pdf.internal.pageSize.getWidth();
         let lastY = headerHeight;
 
-        // Header
         pdf.setFillColor(26, 54, 93);
         pdf.rect(0, 0, pageWidth, headerHeight, 'F');
         pdf.setFontSize(16);
         pdf.setTextColor(255, 255, 255);
-        pdf.text("Hotel Purchase Order System Report", margin, 15);
+        pdf.text(`${cfg.hotelName} — Procurement Report`, margin, 14);
         pdf.setFontSize(9);
-        pdf.text(`Generated on: ${new Date().toLocaleString()}`, margin, 21);
+        pdf.text(`Generated on: ${new Date().toLocaleString()}${cfg.hotelAddress ? '  |  ' + cfg.hotelAddress : ''}`, margin, 21);
 
         // Summary Table
         pdf.setFontSize(12);
@@ -1538,11 +1730,12 @@ export async function downloadReportPdf() {
             pdf.setTextColor(150, 0, 0);
             pdf.text("No requests found with current filters.", margin, lastY + 25);
         } else {
-            const head = [['Date', 'Department', 'Total Cost', 'Requested By', 'Status']];
+            const head = [['Date', 'Type', 'Department', 'Total Cost', 'Requested By', 'Status']];
             const body = state.currentFilteredRequests.map(req => {
-                const date = req.createdAt?.toDate().toLocaleDateString() || 'N/A';
-                const requestedBy = state.allUsersCache.find(u => u.id === req.createdBy)?.email || 'N/A';
-                return [date, req.department, `Birr ${(req.totalCost || 0).toFixed(2)}`, requestedBy, req.status];
+                const date = req.createdAt?.toDate ? req.createdAt.toDate().toLocaleDateString() : 'N/A';
+                const typeLabel = isPurchaseRequest(req) ? 'PO' : 'Req';
+                const requestedBy = state.allUsersCache.find(u => u.id === req.createdBy)?.email || req.createdByEmail || 'N/A';
+                return [date, typeLabel, req.department, formatMoney(req.totalCost || 0, cfg.currency), requestedBy, req.status];
             });
             pdf.autoTable({
                 head, body,
@@ -1550,18 +1743,173 @@ export async function downloadReportPdf() {
                 headStyles: { fillColor: [44, 82, 130] },
                 margin: { left: margin, right: margin },
                 didDrawPage: (data) => {
-                    pdf.setFontSize(10);
-                    pdf.setTextColor(150);
-                    pdf.text(`Page ${data.pageNumber}`, pageWidth / 2, pdf.internal.pageSize.getHeight() - 10, { align: 'center' });
+                    pdf.setFontSize(9);
+                    pdf.setTextColor(140);
+                    pdf.text(`${cfg.footerNote} — Page ${data.pageNumber}`, pageWidth / 2, pdf.internal.pageSize.getHeight() - 10, { align: 'center' });
                 }
             });
         }
 
-        pdf.save(`Hotel_PO_Report_${new Date().toISOString().split('T')[0]}.pdf`);
+        const safeName = cfg.hotelName.replace(/[^a-z0-9]/gi, '_');
+        pdf.save(`${safeName}_Report_${new Date().toISOString().split('T')[0]}.pdf`);
         showNotification("PDF downloaded successfully!");
     } catch (err) {
         console.error('PDF generation or save failed:', err);
         showNotification("PDF could not be downloaded. See console for details.", true);
+    }
+}
+
+/**
+ * Generates an official printable Purchase Order (Flow B) or Store Issue Slip (Flow A)
+ * with signature lines for vendor orders, receiving, and internal custody audit.
+ */
+export function downloadRequestVoucherPdf(requestId) {
+    const req = (state.allRequestsCache || []).find(r => r.id === requestId);
+    if (!req) {
+        showNotification("Request details not found.", true);
+        return;
+    }
+
+    const jsPDF = getJsPdfInstance();
+    if (!jsPDF) {
+        showNotification("PDF generation libraries not loaded. Please refresh the page.", true);
+        return;
+    }
+
+    try {
+        const cfg = getHotelSettings();
+        const isPO = isPurchaseRequest(req);
+        const docTitle = isPO ? 'PURCHASE ORDER' : 'STORE REQUISITION & ISSUE SLIP';
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        const margin = 15;
+        const pageWidth = pdf.internal.pageSize.getWidth();
+
+        // Top Banner
+        pdf.setFillColor(26, 54, 93);
+        pdf.rect(0, 0, pageWidth, 28, 'F');
+        pdf.setFontSize(16);
+        pdf.setTextColor(255, 255, 255);
+        pdf.text(cfg.hotelName, margin, 13);
+        pdf.setFontSize(10);
+        pdf.text(docTitle, margin, 21);
+        pdf.setFontSize(9);
+        pdf.text(`Ref: #${req.id.substring(0, 8).toUpperCase()}`, pageWidth - margin, 13, { align: 'right' });
+        pdf.text(`Status: ${req.status || 'Pending'}`, pageWidth - margin, 21, { align: 'right' });
+
+        if (cfg.hotelAddress) {
+            pdf.setTextColor(90);
+            pdf.setFontSize(8.5);
+            pdf.text(cfg.hotelAddress, margin, 34);
+        }
+
+        // Metadata Grid
+        const metaStartY = cfg.hotelAddress ? 40 : 36;
+        const createdStr = req.createdAt?.toDate ? req.createdAt.toDate().toLocaleString() : 'N/A';
+        const metaRows = [
+            ['Department:', req.department || 'N/A', 'Priority:', req.priority || 'Normal'],
+            ['Requested By:', req.createdByEmail || 'N/A', 'Date Submitted:', createdStr],
+            ['Required By:', req.requiredBy || 'N/A', isPO ? 'Supplier:' : 'Issued To:', isPO ? (req.supplier || 'TBD') : (req.lastIssuedRecipient || 'Pending Issue')]
+        ];
+        if (isPO && (req.orderRef || req.deliveryNote)) {
+            metaRows.push(['Order Ref:', req.orderRef || 'N/A', 'Delivery Inv #:', req.deliveryNote || 'Pending']);
+        }
+
+        pdf.autoTable({
+            body: metaRows,
+            startY: metaStartY,
+            theme: 'grid',
+            styles: { fontSize: 8.5, cellPadding: 2.5 },
+            columnStyles: {
+                0: { fontStyle: 'bold', fillColor: [244, 246, 249], cellWidth: 28 },
+                1: { cellWidth: 62 },
+                2: { fontStyle: 'bold', fillColor: [244, 246, 249], cellWidth: 28 },
+                3: { cellWidth: 62 }
+            },
+            margin: { left: margin, right: margin }
+        });
+
+        let cursorY = pdf.lastAutoTable.finalY + 8;
+
+        // Line Items
+        const head = isPO
+            ? [['#', 'Item Description', 'Unit', 'Ordered', 'Received', 'Unit Price', 'Line Total']]
+            : [['#', 'Item Description', 'Unit', 'Requested', 'Issued', 'Est. Unit Price', 'Est. Total']];
+
+        const body = (req.items || []).map((it, idx) => {
+            const qty = Number(it.quantity || 0);
+            const fulfilled = isPO ? Number(it.receivedQuantity || 0) : Number(it.issuedQuantity || 0);
+            const unitPrice = Number((isPO && it.actualPrice > 0) ? it.actualPrice : (it.price || 0));
+            return [
+                idx + 1,
+                it.name || '',
+                it.unit || 'Each',
+                qty,
+                fulfilled,
+                formatMoney(unitPrice, cfg.currency),
+                formatMoney(unitPrice * qty, cfg.currency)
+            ];
+        });
+
+        pdf.autoTable({
+            head,
+            body,
+            startY: cursorY,
+            headStyles: { fillColor: [44, 82, 130], fontSize: 8.5 },
+            styles: { fontSize: 8.5 },
+            columnStyles: {
+                0: { halign: 'center', cellWidth: 10 },
+                3: { halign: 'center' },
+                4: { halign: 'center' },
+                5: { halign: 'right' },
+                6: { halign: 'right', fontStyle: 'bold' }
+            },
+            margin: { left: margin, right: margin }
+        });
+
+        cursorY = pdf.lastAutoTable.finalY + 6;
+        pdf.setFontSize(11);
+        pdf.setTextColor(26, 54, 93);
+        pdf.text(`Total Estimated Value: ${formatMoney(req.totalCost || 0, cfg.currency)}`, pageWidth - margin, cursorY, { align: 'right' });
+
+        if (req.notes || req.approvalNotes) {
+            cursorY += 8;
+            pdf.setFontSize(8.5);
+            pdf.setTextColor(70);
+            if (req.notes) {
+                pdf.text(`Notes: ${req.notes}`, margin, cursorY, { maxWidth: pageWidth - margin * 2 });
+                cursorY += 6;
+            }
+            if (req.approvalNotes) {
+                pdf.text(`GM Approval Notes: ${req.approvalNotes}`, margin, cursorY, { maxWidth: pageWidth - margin * 2 });
+            }
+        }
+
+        // Signature Block at bottom
+        const sigY = Math.max(cursorY + 24, 240);
+        const colW = (pageWidth - margin * 2) / 3;
+        pdf.setDrawColor(160);
+        pdf.setFontSize(8.5);
+        pdf.setTextColor(80);
+        const labels = isPO
+            ? ['Prepared By (Purchasing)', 'Approved By (General Manager)', 'Received By (Storekeeper)']
+            : ['Requested By (Dept Staff)', 'Approved By (General Manager)', 'Issued By (Storekeeper) / Recipient'];
+        labels.forEach((lbl, idx) => {
+            const x1 = margin + idx * colW + 3;
+            const x2 = margin + (idx + 1) * colW - 3;
+            pdf.line(x1, sigY, x2, sigY);
+            pdf.text(lbl, (x1 + x2) / 2, sigY + 5, { align: 'center' });
+        });
+
+        pdf.setFontSize(8);
+        pdf.setTextColor(150);
+        pdf.text(`${cfg.footerNote} — Generated ${new Date().toLocaleString()}`, pageWidth / 2, pdf.internal.pageSize.getHeight() - 8, { align: 'center' });
+
+        const prefix = isPO ? 'PO' : 'Requisition_Slip';
+        pdf.save(`${prefix}_${req.id.substring(0, 8)}.pdf`);
+        showNotification(`${isPO ? 'Purchase Order' : 'Requisition Slip'} PDF downloaded!`);
+    } catch (err) {
+        console.error('Voucher PDF error:', err);
+        showNotification("Could not generate voucher PDF.", true);
     }
 }
 
@@ -1570,7 +1918,7 @@ export async function downloadReportPdf() {
 // ============================================================================
 
 /**
- * Generates and downloads a CSV report from the currently filtered requests.
+ * Generates and downloads a formula-safe CSV report from currently filtered requests.
  */
 export function downloadReportCsv() {
     if (!hasPermission(state.userRole, 'view_reports')) {
@@ -1583,31 +1931,27 @@ export function downloadReportCsv() {
             return;
         }
 
-        const headers = ['Date', 'Department', 'Total Cost', 'Requested By', 'Status', 'Items', 'Priority', 'Notes', 'Approval Notes'];
-
-        const escCsv = (val) => {
-            const str = String(val ?? '');
-            if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-                return `"${str.replace(/"/g, '""')}"`;
-            }
-            return str;
-        };
+        const cfg = getHotelSettings();
+        const headers = ['Date', 'Type', 'Department', 'Total Cost', 'Requested By', 'Supplier', 'Status', 'Items', 'Priority', 'Notes', 'Approval Notes'];
 
         const rows = state.currentFilteredRequests.map(req => {
-            const date = req.createdAt?.toDate().toLocaleDateString() || 'N/A';
-            const requestedBy = state.allUsersCache.find(u => u.id === req.createdBy)?.email || 'N/A';
-            const itemsSummary = req.items.map(i => `${i.name} x${i.quantity}`).join('; ');
+            const date = req.createdAt?.toDate ? req.createdAt.toDate().toLocaleDateString() : 'N/A';
+            const typeLabel = isPurchaseRequest(req) ? 'Purchase Order' : 'Department Requisition';
+            const requestedBy = state.allUsersCache.find(u => u.id === req.createdBy)?.email || req.createdByEmail || 'N/A';
+            const itemsSummary = (req.items || []).map(i => `${i.name} x${i.quantity} ${i.unit || ''}`).join('; ');
             return [
                 date,
+                typeLabel,
                 req.department,
-                `Birr ${(req.totalCost || 0).toFixed(2)}`,
+                formatMoney(req.totalCost || 0, cfg.currency),
                 requestedBy,
+                req.supplier || '',
                 req.status,
                 itemsSummary,
                 req.priority || 'N/A',
                 req.notes || '',
                 req.approvalNotes || ''
-            ].map(escCsv).join(',');
+            ].map(safeCsvCell).join(',');
         });
 
         const csvContent = [headers.join(','), ...rows].join('\n');
@@ -1633,10 +1977,10 @@ export function downloadReportCsv() {
 
 /**
  * Finds all inventory items below minimum stock level and auto-populates
- * a new purchase request with those items and quantities to restore stock.
+ * a new Purchase Order (Restock) with those items and unit metadata.
  */
 export function handleQuickOrderLowStock() {
-    const lowStockItems = state.inventoryItemsCache.filter(item => item.stock < item.min);
+    const lowStockItems = (state.inventoryItemsCache || []).filter(item => item.stock < item.min);
 
     if (lowStockItems.length === 0) {
         showNotification("No low-stock items to reorder. All inventory levels are healthy!", false);
@@ -1660,7 +2004,8 @@ export function handleQuickOrderLowStock() {
     if (!container) return;
     container.innerHTML = '';
 
-    // Add a row for each low-stock item and pre-fill
+    // Add a row for each low-stock item and pre-fill unit/price metadata
+    const curr = getHotelSettings().currency;
     lowStockItems.forEach(item => {
         addRequestItemRow();
         const rows = container.querySelectorAll('.item-row');
@@ -1671,29 +2016,72 @@ export function handleQuickOrderLowStock() {
         const priceInput = lastRow.querySelector('.item-price');
         const subtotalSpan = lastRow.querySelector('.item-subtotal');
 
-        const deficit = item.min - item.stock;
-        const qty = Math.max(deficit, 1);
+        const deficit = Number(item.min || 0) - Number(item.stock || 0);
+        const qty = Math.max(Math.ceil(deficit), 1);
 
         if (nameInput) nameInput.value = item.name;
+        handleItemRowNameChange(lastRow);
         if (quantityInput) quantityInput.value = qty;
-        if (priceInput) priceInput.value = item.price || 0;
-        if (subtotalSpan) subtotalSpan.textContent = `Birr ${((item.price || 0) * qty).toFixed(2)}`;
+        const unitPrice = parseFloat(priceInput?.value) || Number(item.price || 0);
+        if (subtotalSpan) subtotalSpan.textContent = formatMoney(unitPrice * qty, curr);
     });
 
     updateTotalCost();
 
-    // Set notes to indicate this was auto-generated
     const notesField = document.getElementById('req-notes');
     if (notesField) {
         notesField.value = `Auto-generated restock order for ${lowStockItems.length} low-stock item(s).`;
     }
 
-    showNotification(`${lowStockItems.length} low-stock item(s) added to new request. Review and submit.`, false);
+    showNotification(`${lowStockItems.length} low-stock item(s) added to new Purchase Order. Review and submit.`, false);
 }
 
 // ============================================================================
 // Hotel Settings & Permissions Actions
 // ============================================================================
+
+/**
+ * Saves white-label hotel identity, currency, address, and voucher footer to Firestore settings/general.
+ */
+export async function handleSaveHotelSettings(e) {
+    e.preventDefault();
+    if (!hasPermission(state.userRole, 'manage_settings')) {
+        showNotification("You do not have permission to configure hotel settings.", true);
+        return;
+    }
+
+    const hotelName = (document.getElementById('setting-hotel-name')?.value || '').trim();
+    const currency = (document.getElementById('setting-currency')?.value || '').trim();
+    const hotelAddress = (document.getElementById('setting-hotel-address')?.value || '').trim();
+    const footerNote = (document.getElementById('setting-footer-note')?.value || '').trim();
+
+    if (!hotelName || !currency) {
+        showNotification("Hotel Name and Currency Label are required.", true);
+        return;
+    }
+
+    showLoadingOverlay();
+    try {
+        const payload = {
+            hotelName,
+            currency,
+            hotelAddress,
+            footerNote: footerNote || DEFAULT_HOTEL_SETTINGS.footerNote,
+            updatedAt: serverTimestamp(),
+            updatedBy: state.userId || 'admin'
+        };
+        await setDoc(doc(state.db, 'settings', 'general'), payload, { merge: true });
+        state.hotelSettings = { ...DEFAULT_HOTEL_SETTINGS, hotelName, currency, hotelAddress, footerNote: payload.footerNote };
+        applyHotelBranding();
+        updateTotalCost();
+        showNotification("Hotel identity & currency settings updated!");
+    } catch (error) {
+        console.error("Error saving hotel branding settings:", error);
+        showNotification("Failed to save hotel settings.", true);
+    } finally {
+        hideLoadingOverlay();
+    }
+}
 
 /**
  * Adds a new department to Firestore.
@@ -1937,11 +2325,18 @@ export async function handleNotificationClick(notifId, requestId) {
  * Works both for pre-existing items with 0 movements (opening baseline) and items that had
  * prior stock before movement tracking began (recording the exact missing variance).
  */
+let isReconciling = false;
+
+/**
+ * Reconciles variances between physical System Stock and Computed Stock (Total IN - Total OUT)
+ * using atomic batched writes and an in-flight guard against double-clicks.
+ */
 export async function handleBaselineOpeningStock(itemId = null) {
     if (!hasPermission(state.userRole, 'manage_inventory')) {
         showNotification("You do not have permission to configure inventory baselines.", true);
         return;
     }
+    if (isReconciling) return;
 
     const reconRows = computeStockReconciliation();
     const itemsToProcess = itemId
@@ -1953,14 +2348,16 @@ export async function handleBaselineOpeningStock(itemId = null) {
         return;
     }
 
+    isReconciling = true;
     showLoadingOverlay();
     try {
         let count = 0;
         const invMap = new Map((state.inventoryItemsCache || []).map(i => [i.id, i]));
+        const entries = [];
 
         for (const r of itemsToProcess) {
-            const diff = Number(r.difference || 0);
-            if (diff === 0) continue;
+            const diff = roundQty(r.difference || 0);
+            if (Math.abs(diff) < 0.001) continue;
 
             const invItem = invMap.get(r.id);
             const unitLabel = invItem?.unit || 'units';
@@ -1973,7 +2370,7 @@ export async function handleBaselineOpeningStock(itemId = null) {
                     ? `Reconciliation Opening Balance Adjustment (+${adjustQty} ${unitLabel})`
                     : `Physical Count Reconciliation Adjustment (-${adjustQty} ${unitLabel})`);
 
-            await addDoc(collection(state.db, 'stock_movements'), {
+            entries.push(buildMovementEntry({
                 itemId: r.id,
                 itemName: r.name,
                 category: r.category || 'General',
@@ -1984,12 +2381,18 @@ export async function handleBaselineOpeningStock(itemId = null) {
                 unitPrice: Number(r.price || 0),
                 department: 'Store',
                 recipient: 'Store Warehouse Reconciliation',
-                reason,
-                issuedBy: state.userId,
-                issuedByEmail: state.auth?.currentUser?.email || 'Storekeeper',
-                timestamp: serverTimestamp()
-            });
+                reason
+            }));
             count++;
+        }
+
+        // Commit atomically in chunks of <= 400 (Firestore batch limit is 500)
+        for (let i = 0; i < entries.length; i += 400) {
+            const batch = writeBatch(state.db);
+            entries.slice(i, i + 400).forEach(entry => {
+                batch.set(doc(collection(state.db, 'stock_movements')), entry);
+            });
+            await batch.commit();
         }
 
         showNotification(`Successfully reconciled ${count} item(s)! Ledger is now 100% balanced.`);
@@ -2000,6 +2403,7 @@ export async function handleBaselineOpeningStock(itemId = null) {
         console.error("Error reconciling stock variance:", err);
         showNotification("Failed to reconcile stock variance.", true);
     } finally {
+        isReconciling = false;
         hideLoadingOverlay();
     }
 }

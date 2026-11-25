@@ -23,19 +23,19 @@ import {
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix,
     handleItemRowNameChange, handleItemRowUnitChange, renderNotificationBell, updateSidebarBadges, toggleNotificationDropdown,
     renderStoreOperations
-} from './ui.js?v=3.1';
+} from './ui.js?v=3.2';
 import {
-    handleLogin, handleLogout, handleCreateUser,
+    handleLogin, handleForgotPassword, handleLogout, handleCreateUser,
     handleEditUser, handleSaveUserEdit, handleResetUserPassword, handleDeleteUser,
     handleRequestFormSubmit, updateRequestStatus, markRequestAsReceived,
     handleItemFormSubmit, deleteInventoryItem, handleIssueStock, handleReceiveStock,
     handleMarkAsOrdered, handleIssueRequisitionSubmit, handleReceiveGoodsSubmit,
-    handleSetBudget, downloadReportPdf, downloadReportCsv, handleQuickOrderLowStock,
+    handleSetBudget, downloadReportPdf, downloadReportCsv, downloadRequestVoucherPdf, handleQuickOrderLowStock,
     handleAddDepartment, handleDeleteDepartment, handleSaveRolePermissions, handleResetRolePermissions,
-    runOneTimeRequestAudit, handleMarkAllNotificationsRead, handleNotificationClick,
+    handleSaveHotelSettings, handleMarkAllNotificationsRead, handleNotificationClick,
     handleBaselineOpeningStock
-} from './actions.js?v=3.1';
-import { initializeFirebase } from './auth.js?v=3.1';
+} from './actions.js?v=3.2';
+import { initializeFirebase } from './auth.js?v=3.2';
 
 // ============================================================================
 // DOM Content Loaded — Wire everything up
@@ -50,16 +50,18 @@ document.addEventListener('DOMContentLoaded', () => {
     // Populate department selects across the app
     refreshDepartmentSelects();
 
-    // Background normalization for Flow A / Flow B data model
-    runOneTimeRequestAudit();
-
     // --- Form Submissions ---
     document.getElementById('login-form').addEventListener('submit', handleLogin);
+    const forgotPwdBtn = document.getElementById('forgot-password-btn');
+    if (forgotPwdBtn) forgotPwdBtn.addEventListener('click', handleForgotPassword);
     document.getElementById('create-user-form').addEventListener('submit', handleCreateUser);
     document.getElementById('purchase-request-form').addEventListener('submit', handleRequestFormSubmit);
     document.getElementById('set-budget-btn').addEventListener('click', handleSetBudget);
 
     // Hotel Settings & Role Permissions Forms
+    const hotelBrandingForm = document.getElementById('hotel-branding-form');
+    if (hotelBrandingForm) hotelBrandingForm.addEventListener('submit', handleSaveHotelSettings);
+
     const addDeptForm = document.getElementById('add-dept-form');
     if (addDeptForm) addDeptForm.addEventListener('submit', handleAddDepartment);
 
@@ -236,6 +238,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (usersSearch) {
         usersSearch.addEventListener('input', (e) => {
             renderUsersTable(state.allUsersCache, e.target.value);
+        });
+    }
+    const showDeletedToggle = document.getElementById('show-deleted-users-toggle');
+    if (showDeletedToggle) {
+        showDeletedToggle.addEventListener('change', () => {
+            renderUsersTable(state.allUsersCache, usersSearch?.value || '');
         });
     }
 
@@ -466,6 +474,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const req = state.allRequestsCache.find(r => r.id === reqId);
             if (req) { showRequestDetailsModal(req); }
             else { showNotification("Request details not found.", true); }
+            return;
+        }
+
+        // Print / Download official Voucher PDF (PO or Requisition Slip)
+        const voucherPdfBtn = e.target.closest('.download-voucher-pdf-btn');
+        if (voucherPdfBtn) {
+            downloadRequestVoucherPdf(voucherPdfBtn.dataset.id);
             return;
         }
 

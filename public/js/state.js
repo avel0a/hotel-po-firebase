@@ -26,6 +26,7 @@ const state = {
     departmentsCache: [],
     notificationsCache: [],
     rolePermissions: {},
+    hotelSettings: null,
 
     // Chart.js instances (destroyed and recreated on data change)
     requestsStatusChart: null,

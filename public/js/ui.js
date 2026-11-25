@@ -5,7 +5,49 @@
 
 import state from './state.js';
 import { doc, getDoc } from './firebase.js';
-import { DEPARTMENTS, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, UNITS, DEFAULT_UNIT_MULTIPLIERS, getUnitConversionFactor, isPurchaseRequest, normalizeRole } from './config.js';
+import {
+    DEPARTMENTS, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS,
+    UNITS, DEFAULT_UNIT_MULTIPLIERS, DEFAULT_HOTEL_SETTINGS, COMMITTED_STATUSES,
+    getUnitConversionFactor, isPurchaseRequest, normalizeRole,
+    escapeHtml, safeCsvCell, formatMoney, roundQty
+} from './config.js';
+
+export function getHotelSettings() {
+    return {
+        ...DEFAULT_HOTEL_SETTINGS,
+        ...(state.hotelSettings || {})
+    };
+}
+
+export function applyHotelBranding() {
+    const cfg = getHotelSettings();
+    const titleEl = document.getElementById('sidebar-hotel-title');
+    if (titleEl) titleEl.textContent = cfg.hotelName;
+    document.title = cfg.hotelName;
+
+    const nameInput = document.getElementById('setting-hotel-name');
+    const currInput = document.getElementById('setting-currency');
+    const addrInput = document.getElementById('setting-hotel-address');
+    const footInput = document.getElementById('setting-footer-note');
+    if (nameInput && !nameInput.matches(':focus')) nameInput.value = cfg.hotelName;
+    if (currInput && !currInput.matches(':focus')) currInput.value = cfg.currency;
+    if (addrInput && !addrInput.matches(':focus')) addrInput.value = cfg.hotelAddress || '';
+    if (footInput && !footInput.matches(':focus')) footInput.value = cfg.footerNote || '';
+
+    const unitPriceHeader = document.getElementById('req-unit-price-header');
+    if (unitPriceHeader) unitPriceHeader.textContent = `Unit Price (${cfg.currency})`;
+    const budgetLabel = document.getElementById('budget-amount-label');
+    if (budgetLabel) budgetLabel.textContent = `Budget Amount (${cfg.currency})`;
+
+    // Refresh visible request form currency labels if initialized
+    if (document.getElementById('items-container')) {
+        document.querySelectorAll('#items-container .item-row').forEach(row => updateItemSubtotal(row));
+    }
+}
+
+function money(amount) {
+    return formatMoney(amount, getHotelSettings().currency);
+}
 
 // ============================================================================
 // Loading Overlay
@@ -30,11 +72,16 @@ export function hideLoadingOverlay() {
 
 export function showNotification(message, isError = false) {
     const notification = document.getElementById('notification');
-    notification.innerHTML = `<p id="notification-message">${message}</p>`;
+    if (!notification) return;
+    notification.innerHTML = '';
+    const p = document.createElement('p');
+    p.id = 'notification-message';
+    p.textContent = String(message ?? '');
+    notification.appendChild(p);
     notification.className = `notification fixed bottom-5 right-5 text-white py-2 px-4 rounded-lg shadow-lg opacity-0 transform translate-y-10 z-[70] ${isError ? 'bg-red-500' : 'bg-green-500'}`;
     clearTimeout(state.notificationTimeout);
     setTimeout(() => { notification.classList.add('show'); }, 10);
-    state.notificationTimeout = setTimeout(() => { notification.classList.remove('show'); }, 3000);
+    state.notificationTimeout = setTimeout(() => { notification.classList.remove('show'); }, 3500);
 }
 
 // ============================================================================
@@ -80,7 +127,7 @@ export function getStatusBadge(status) {
         classes: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600',
         icon: 'fa-circle'
     };
-    return `<span class="inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded-full ${config.classes}"><i class="fas ${config.icon} mr-1 text-[10px]"></i>${status}</span>`;
+    return `<span class="inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded-full ${config.classes}"><i class="fas ${config.icon} mr-1 text-[10px]"></i>${escapeHtml(status)}</span>`;
 }
 
 // ============================================================================
@@ -118,7 +165,7 @@ export function getActiveDepartments() {
  */
 export function refreshDepartmentSelects() {
     const activeDepts = getActiveDepartments();
-    const optionsHtml = activeDepts.map(d => `<option value="${d}">${d}</option>`).join('');
+    const optionsHtml = activeDepts.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
 
     const reqDept = document.getElementById('req-department');
     if (reqDept) {
@@ -252,14 +299,14 @@ export function renderDepartmentsList() {
                         <i class="fas fa-hotel text-xs"></i>
                     </div>
                     <div>
-                        <div class="text-sm font-semibold text-gray-800 dark:text-gray-100">${dept}</div>
+                        <div class="text-sm font-semibold text-gray-800 dark:text-gray-100">${escapeHtml(dept)}</div>
                         <div class="text-xs text-gray-500 dark:text-gray-400">
                             <span>${userCount} staff</span> • <span>${reqCount} requests</span>
                         </div>
                     </div>
                 </div>
                 <div class="flex items-center space-x-2">
-                    <button type="button" class="delete-dept-btn p-1.5 text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors rounded hover:bg-red-50 dark:hover:bg-red-950/40" data-department="${dept}" title="Delete Department">
+                    <button type="button" class="delete-dept-btn p-1.5 text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors rounded hover:bg-red-50 dark:hover:bg-red-950/40" data-department="${escapeHtml(dept)}" title="Delete Department">
                         <i class="fas fa-trash-alt text-xs"></i>
                     </button>
                 </div>
@@ -341,7 +388,7 @@ export function showSection(sectionId) {
         // Populate override dropdown with active departments
         const activeDepts = getActiveDepartments();
         if (overrideSelect) {
-            overrideSelect.innerHTML = activeDepts.map(d => `<option value="${d}" ${d === userDept ? 'selected' : ''}>${d}</option>`).join('');
+            overrideSelect.innerHTML = activeDepts.map(d => `<option value="${escapeHtml(d)}" ${d === userDept ? 'selected' : ''}>${escapeHtml(d)}</option>`).join('');
         }
 
         // Auto-select Request Purpose based on user role
@@ -370,6 +417,7 @@ export function showSection(sectionId) {
     }
 
     if (sectionId === 'settings') {
+        applyHotelBranding();
         renderDepartmentsList();
         renderPermissionsMatrix();
     }
@@ -466,15 +514,15 @@ export function showItemModal(item = null) {
                         <div class="grid grid-cols-2 gap-3">
                             <div>
                                 <label for="item-stock" class="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">Current Stock</label>
-                                <input type="number" id="item-stock" min="0" class="w-full p-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 font-bold transition-colors duration-300 text-sm" required>
+                                <input type="number" step="any" id="item-stock" min="0" class="w-full p-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 font-bold transition-colors duration-300 text-sm" required>
                             </div>
                             <div>
                                 <label for="item-min" class="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">Min. Alert Level</label>
-                                <input type="number" id="item-min" min="0" class="w-full p-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 transition-colors duration-300 text-sm" required>
+                                <input type="number" step="any" id="item-min" min="0" class="w-full p-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 transition-colors duration-300 text-sm" required>
                             </div>
                         </div>
                         <div>
-                            <label for="item-price" class="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">Base Unit Price (Birr)</label>
+                            <label for="item-price" class="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">Base Unit Price (${escapeHtml(getHotelSettings().currency)})</label>
                             <input type="number" step="0.01" min="0" id="item-price" class="w-full p-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 transition-colors duration-300 text-sm" required>
                         </div>
                         <div id="item-adjustment-reason-container" class="${item ? '' : 'hidden'}">
@@ -488,7 +536,7 @@ export function showItemModal(item = null) {
                                     <span class="text-gray-600 dark:text-gray-300 flex items-center">
                                         <i class="fas fa-history text-indigo-500 mr-1.5"></i> Movement History
                                     </span>
-                                    <button type="button" class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 font-semibold view-item-history-btn" data-id="${item.id}">
+                                    <button type="button" class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 font-semibold view-item-history-btn" data-id="${escapeHtml(item.id)}">
                                         View Audit Trail ➔
                                     </button>
                                 </div>
@@ -546,7 +594,7 @@ export function showIssueModal(item) {
     const modal = document.getElementById('issue-modal');
     if (!modal) return;
 
-    const deptOptions = getActiveDepartments().map(d => `<option value="${d}">${d}</option>`).join('');
+    const deptOptions = getActiveDepartments().map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
 
     modal.innerHTML = `
         <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md transition-colors duration-300 overflow-hidden mx-4">
@@ -562,26 +610,26 @@ export function showIssueModal(item) {
                 </button>
             </div>
             <form id="issue-stock-form" class="p-6 space-y-4">
-                <input type="hidden" id="issue-item-id" value="${item.id}">
-                <input type="hidden" id="issue-item-name" value="${item.name}">
-                <input type="hidden" id="issue-item-category" value="${item.category || 'General'}">
-                <input type="hidden" id="issue-current-stock" value="${item.stock}">
+                <input type="hidden" id="issue-item-id" value="${escapeHtml(item.id)}">
+                <input type="hidden" id="issue-item-name" value="${escapeHtml(item.name)}">
+                <input type="hidden" id="issue-item-category" value="${escapeHtml(item.category || 'General')}">
+                <input type="hidden" id="issue-current-stock" value="${Number(item.stock || 0)}">
 
                 <div class="bg-emerald-50 dark:bg-emerald-900/30 p-3.5 rounded-lg border border-emerald-200 dark:border-emerald-800 flex justify-between items-center">
                     <div>
-                        <div class="font-bold text-gray-900 dark:text-gray-100">${item.name}</div>
-                        <div class="text-xs text-gray-500 dark:text-gray-400">Category: ${item.category}</div>
+                        <div class="font-bold text-gray-900 dark:text-gray-100">${escapeHtml(item.name)}</div>
+                        <div class="text-xs text-gray-500 dark:text-gray-400">Category: ${escapeHtml(item.category)}</div>
                     </div>
                     <div class="text-right">
                         <div class="text-xs font-semibold text-emerald-700 dark:text-emerald-300 uppercase">Available in Store</div>
-                        <div class="text-xl font-extrabold text-emerald-800 dark:text-emerald-200">${item.stock}</div>
+                        <div class="text-xl font-extrabold text-emerald-800 dark:text-emerald-200">${Number(item.stock || 0)}</div>
                     </div>
                 </div>
 
                 <div>
                     <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Quantity to Take / Issue *</label>
-                    <input type="number" id="issue-quantity" min="1" max="${item.stock}" value="1" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors" required>
-                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Must be between 1 and ${item.stock}.</p>
+                    <input type="number" step="any" id="issue-quantity" min="0.01" max="${Number(item.stock || 0)}" value="1" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors" required>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Must be between 0.01 and ${Number(item.stock || 0)}.</p>
                 </div>
 
                 <div>
@@ -631,18 +679,18 @@ export function showReceiveModal(item = null) {
 
     const items = state.inventoryItemsCache || [];
     const itemSelectHtml = item ? `
-        <input type="hidden" id="receive-item-id" value="${item.id}">
-        <input type="hidden" id="receive-item-name" value="${item.name}">
-        <input type="hidden" id="receive-item-category" value="${item.category || 'General'}">
-        <input type="hidden" id="receive-current-stock" value="${item.stock}">
+        <input type="hidden" id="receive-item-id" value="${escapeHtml(item.id)}">
+        <input type="hidden" id="receive-item-name" value="${escapeHtml(item.name)}">
+        <input type="hidden" id="receive-item-category" value="${escapeHtml(item.category || 'General')}">
+        <input type="hidden" id="receive-current-stock" value="${Number(item.stock || 0)}">
         <div class="bg-emerald-50 dark:bg-emerald-900/30 p-3.5 rounded-lg border border-emerald-200 dark:border-emerald-800 flex justify-between items-center">
             <div>
-                <div class="font-bold text-gray-900 dark:text-gray-100">${item.name}</div>
-                <div class="text-xs text-gray-500 dark:text-gray-400">Category: ${item.category}</div>
+                <div class="font-bold text-gray-900 dark:text-gray-100">${escapeHtml(item.name)}</div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">Category: ${escapeHtml(item.category)}</div>
             </div>
             <div class="text-right">
                 <div class="text-xs font-semibold text-emerald-700 dark:text-emerald-300 uppercase">Current Stock</div>
-                <div class="text-xl font-extrabold text-emerald-800 dark:text-emerald-200">${item.stock}</div>
+                <div class="text-xl font-extrabold text-emerald-800 dark:text-emerald-200">${Number(item.stock || 0)}</div>
             </div>
         </div>
     ` : `
@@ -650,7 +698,7 @@ export function showReceiveModal(item = null) {
             <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Select Item to Stock In</label>
             <select id="receive-item-select" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors" required>
                 <option value="">-- Choose item from inventory --</option>
-                ${items.map(i => `<option value="${i.id}" data-stock="${i.stock}" data-name="${i.name}" data-category="${i.category}" data-price="${i.price || 0}">${i.name} (Current: ${i.stock})</option>`).join('')}
+                ${items.map(i => `<option value="${escapeHtml(i.id)}" data-stock="${Number(i.stock || 0)}" data-name="${escapeHtml(i.name)}" data-category="${escapeHtml(i.category)}" data-price="${Number(i.price || 0)}">${escapeHtml(i.name)} (Current: ${Number(i.stock || 0)})</option>`).join('')}
             </select>
         </div>
         <div id="receive-selected-info" class="hidden bg-emerald-50 dark:bg-emerald-900/30 p-3 rounded-lg border border-emerald-200 dark:border-emerald-800 flex justify-between items-center">
@@ -688,10 +736,10 @@ export function showReceiveModal(item = null) {
                 <div class="grid grid-cols-2 gap-3">
                     <div>
                         <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Quantity Received</label>
-                        <input type="number" id="receive-quantity" min="1" placeholder="e.g. 50" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors" required>
+                        <input type="number" step="any" id="receive-quantity" min="0.01" placeholder="e.g. 50" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors" required>
                     </div>
                     <div>
-                        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Unit Price (Birr)</label>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Unit Price (${escapeHtml(getHotelSettings().currency)})</label>
                         <input type="number" step="0.01" min="0" id="receive-price" value="${item ? (item.price || '') : ''}" placeholder="e.g. 250" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-emerald-500 focus:border-emerald-500 transition-colors">
                     </div>
                 </div>
@@ -817,17 +865,19 @@ export function showIssueRequisitionModal(req) {
 
         const defaultIssue = maxIssuable > 0 ? maxIssuable : 0;
         const isStockLow = availableInRequestedUnit < remainingQty;
-        const packageHint = conversionFactor !== 1 ? `<div class="text-[10px] text-blue-600 dark:text-blue-400 font-medium">1 ${item.unit} = ${conversionFactor} ${invItem?.unit || item.baseUnit || 'units'}</div>` : '';
+        const safeUnit = escapeHtml(item.unit || 'Units');
+        const safeBaseUnit = escapeHtml(invItem?.unit || item.baseUnit || 'units');
+        const packageHint = conversionFactor !== 1 ? `<div class="text-[10px] text-blue-600 dark:text-blue-400 font-medium">1 ${safeUnit} = ${conversionFactor} ${safeBaseUnit}</div>` : '';
 
         // Status badge
         let stockBadge = '';
         if (!invItem) {
             stockBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"><i class="fas fa-exclamation-triangle mr-1"></i> Not in catalog</span>`;
         } else if (isOutOfStock) {
-            stockBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"><i class="fas fa-times-circle mr-1"></i> Out of Stock (0 ${invItem.unit || ''})</span>`;
+            stockBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"><i class="fas fa-times-circle mr-1"></i> Out of Stock (0 ${escapeHtml(invItem.unit || '')})</span>`;
         } else {
             stockBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${isStockLow ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300' : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'}">
-                ${currentStock} ${invItem.unit || 'in store'}
+                ${currentStock} ${escapeHtml(invItem.unit || 'in store')}
             </span>`;
         }
 
@@ -864,7 +914,7 @@ export function showIssueRequisitionModal(req) {
                         min="0"
                         max="${maxIssuable}"
                         value="${defaultIssue}">
-                    <span class="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">Max: ${maxIssuable} ${item.unit || ''}</span>
+                    <span class="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">Max: ${maxIssuable} ${escapeHtml(item.unit || '')}</span>
                 </div>
             `;
         }
@@ -872,13 +922,13 @@ export function showIssueRequisitionModal(req) {
         return `
             <tr class="border-b border-gray-150 dark:border-gray-700/60 hover:bg-gray-50/50 dark:hover:bg-gray-755">
                 <td class="py-3 px-3">
-                    <div class="font-medium text-gray-900 dark:text-gray-100">${item.name}</div>
-                    <div class="text-xs text-gray-500 dark:text-gray-400">${item.unit || 'Units'}</div>
+                    <div class="font-medium text-gray-900 dark:text-gray-100">${escapeHtml(item.name)}</div>
+                    <div class="text-xs text-gray-500 dark:text-gray-400">${safeUnit}</div>
                     ${packageHint}
                 </td>
                 <td class="py-3 px-3 text-center font-semibold text-gray-700 dark:text-gray-300">
                     ${requestedQty}
-                    ${conversionFactor !== 1 ? `<div class="text-[10px] text-gray-400">(${requestedQty * conversionFactor} ${invItem?.unit || 'base'})</div>` : ''}
+                    ${conversionFactor !== 1 ? `<div class="text-[10px] text-gray-400">(${roundQty(requestedQty * conversionFactor)} ${safeBaseUnit})</div>` : ''}
                 </td>
                 <td class="py-3 px-3 text-center text-xs text-gray-500 dark:text-gray-400">
                     ${issuedQty}
@@ -888,7 +938,7 @@ export function showIssueRequisitionModal(req) {
                 </td>
                 <td class="py-3 px-3 text-center">
                     ${stockBadge}
-                    ${conversionFactor !== 1 && currentStock > 0 ? `<div class="text-[10px] text-gray-500 mt-0.5">(${availableInRequestedUnit} ${item.unit} issuable)</div>` : ''}
+                    ${conversionFactor !== 1 && currentStock > 0 ? `<div class="text-[10px] text-gray-500 mt-0.5">(${availableInRequestedUnit} ${safeUnit} issuable)</div>` : ''}
                 </td>
                 <td class="py-3 px-3 text-right">
                     ${inputHtml}
@@ -937,24 +987,24 @@ export function showIssueRequisitionModal(req) {
                 </button>
             </div>
             <form id="issue-requisition-form" class="p-6 space-y-4 overflow-y-auto flex-1">
-                <input type="hidden" id="issue-req-id" value="${req.id}">
+                <input type="hidden" id="issue-req-id" value="${escapeHtml(req.id)}">
 
                 <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-blue-50/60 dark:bg-blue-950/20 p-3.5 rounded-lg border border-blue-200/60 dark:border-blue-900/40 text-xs">
                     <div>
                         <span class="text-gray-500 dark:text-gray-400 block">Requisition #:</span>
-                        <span class="font-bold text-gray-800 dark:text-gray-200">#${req.id.substring(0, 8)}</span>
+                        <span class="font-bold text-gray-800 dark:text-gray-200">#${escapeHtml(req.id.substring(0, 8))}</span>
                     </div>
                     <div>
                         <span class="text-gray-500 dark:text-gray-400 block">Department:</span>
-                        <span class="font-bold text-gray-800 dark:text-gray-200">${req.department}</span>
+                        <span class="font-bold text-gray-800 dark:text-gray-200">${escapeHtml(req.department)}</span>
                     </div>
                     <div>
                         <span class="text-gray-500 dark:text-gray-400 block">Requested By:</span>
-                        <span class="font-bold text-gray-800 dark:text-gray-200 truncate block" title="${req.createdByEmail || ''}">${req.createdByEmail || 'N/A'}</span>
+                        <span class="font-bold text-gray-800 dark:text-gray-200 truncate block" title="${escapeHtml(req.createdByEmail || '')}">${escapeHtml(req.createdByEmail || 'N/A')}</span>
                     </div>
                     <div>
                         <span class="text-gray-500 dark:text-gray-400 block">Priority:</span>
-                        <span class="font-bold text-gray-800 dark:text-gray-200">${req.priority}</span>
+                        <span class="font-bold text-gray-800 dark:text-gray-200">${escapeHtml(req.priority)}</span>
                     </div>
                 </div>
 
@@ -1064,8 +1114,8 @@ export function showOrderPOModal(req) {
 
     const itemsSummary = (req.items || []).map(i =>
         `<li class="flex justify-between text-xs py-1 border-b border-gray-100 dark:border-gray-700">
-            <span class="font-medium text-gray-800 dark:text-gray-200">${i.name} (${i.quantity} ${i.unit || ''})</span>
-            <span class="text-gray-600 dark:text-gray-400">Birr ${((i.price || 0) * (i.quantity || 1)).toFixed(2)}</span>
+            <span class="font-medium text-gray-800 dark:text-gray-200">${escapeHtml(i.name)} (${Number(i.quantity || 0)} ${escapeHtml(i.unit || '')})</span>
+            <span class="text-gray-600 dark:text-gray-400">${money((i.price || 0) * (i.quantity || 1))}</span>
         </li>`
     ).join('');
 
@@ -1087,12 +1137,12 @@ export function showOrderPOModal(req) {
                 </button>
             </div>
             <form id="order-po-form" class="p-6 space-y-4">
-                <input type="hidden" id="order-po-id" value="${req.id}">
+                <input type="hidden" id="order-po-id" value="${escapeHtml(req.id)}">
 
                 <div class="bg-purple-50/60 dark:bg-purple-950/20 p-3.5 rounded-lg border border-purple-200/60 dark:border-purple-900/40 text-xs">
                     <div class="flex justify-between mb-1.5">
-                        <span class="font-semibold text-gray-700 dark:text-gray-300">Purchase Order: #${req.id.substring(0, 8)}</span>
-                        <span class="font-bold text-purple-700 dark:text-purple-300">Total: Birr ${(req.totalCost || 0).toFixed(2)}</span>
+                        <span class="font-semibold text-gray-700 dark:text-gray-300">Purchase Order: #${escapeHtml(req.id.substring(0, 8))}</span>
+                        <span class="font-bold text-purple-700 dark:text-purple-300">Total: ${money(req.totalCost || 0)}</span>
                     </div>
                     <ul class="max-h-28 overflow-y-auto">
                         ${itemsSummary}
@@ -1103,7 +1153,7 @@ export function showOrderPOModal(req) {
                     <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
                         Supplier / Vendor Name *
                     </label>
-                    <input type="text" id="order-po-supplier" placeholder="e.g. Bole Wholesale Food Trading PLC, Ambassel..." value="${req.supplier || ''}" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-purple-500 focus:border-purple-500 transition-colors" required>
+                    <input type="text" id="order-po-supplier" placeholder="e.g. Bole Wholesale Food Trading PLC, Ambassel..." value="${escapeHtml(req.supplier || '')}" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-purple-500 focus:border-purple-500 transition-colors" required>
                 </div>
 
                 <div class="grid grid-cols-2 gap-3">
@@ -1111,13 +1161,13 @@ export function showOrderPOModal(req) {
                         <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
                             Supplier Order / Quote #
                         </label>
-                        <input type="text" id="order-po-ref" placeholder="e.g. QT-2026-90" value="${req.orderRef || ''}" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-purple-500 focus:border-purple-500 transition-colors">
+                        <input type="text" id="order-po-ref" placeholder="e.g. QT-2026-90" value="${escapeHtml(req.orderRef || '')}" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-purple-500 focus:border-purple-500 transition-colors">
                     </div>
                     <div>
                         <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
                             Expected Delivery Date *
                         </label>
-                        <input type="date" id="order-po-delivery-date" value="${req.expectedDeliveryDate || defaultDateStr}" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-purple-500 focus:border-purple-500 transition-colors" required>
+                        <input type="date" id="order-po-delivery-date" value="${escapeHtml(req.expectedDeliveryDate || defaultDateStr)}" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-purple-500 focus:border-purple-500 transition-colors" required>
                     </div>
                 </div>
 
@@ -1125,7 +1175,7 @@ export function showOrderPOModal(req) {
                     <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
                         Purchasing Notes & Terms
                     </label>
-                    <textarea id="order-po-notes" rows="2" placeholder="e.g. Net 30 payment, free delivery to hotel loading dock..." class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-purple-500 focus:border-purple-500 transition-colors">${req.purchasingNotes || ''}</textarea>
+                    <textarea id="order-po-notes" rows="2" placeholder="e.g. Net 30 payment, free delivery to hotel loading dock..." class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-purple-500 focus:border-purple-500 transition-colors">${escapeHtml(req.purchasingNotes || '')}</textarea>
                 </div>
 
                 <div class="p-3 bg-purple-50 dark:bg-purple-950/30 rounded-lg border border-purple-200 dark:border-purple-800 text-xs text-purple-900 dark:text-purple-200 flex items-start space-x-2">
@@ -1163,29 +1213,32 @@ export function showReceiveGoodsModal(req) {
     const modal = document.getElementById('receive-goods-modal');
     if (!modal) return;
 
+    const curr = escapeHtml(getHotelSettings().currency);
     const itemsRowsHtml = (req.items || []).map((item, idx) => {
         const orderedQty = Number(item.quantity || 0);
         const receivedQty = Number(item.receivedQuantity || 0);
-        const remainingQty = Math.max(0, orderedQty - receivedQty);
+        const remainingQty = Math.max(0, roundQty(orderedQty - receivedQty));
         const currentPrice = Number(item.price || 0);
         const conversionFactor = Number(item.conversionFactor) || (DEFAULT_UNIT_MULTIPLIERS[item.unit] || 1);
+        const safeUnit = escapeHtml(item.unit || 'Units');
+        const safeBaseUnit = escapeHtml(item.baseUnit || 'units');
         const packageNote = conversionFactor !== 1
-            ? `<div class="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">1 ${item.unit} = ${conversionFactor} ${item.baseUnit || 'units'}</div>`
+            ? `<div class="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">1 ${safeUnit} = ${conversionFactor} ${safeBaseUnit}</div>`
             : '';
         const baseCostNote = conversionFactor !== 1 && currentPrice > 0
-            ? `<div class="text-[10px] text-gray-400 text-right mt-0.5">≈ ${(currentPrice / conversionFactor).toFixed(2)} Birr / ${item.baseUnit || 'unit'}</div>`
+            ? `<div class="text-[10px] text-gray-400 text-right mt-0.5">≈ ${(currentPrice / conversionFactor).toFixed(2)} ${curr} / ${escapeHtml(item.baseUnit || 'unit')}</div>`
             : '';
 
         return `
             <tr class="border-b border-gray-150 dark:border-gray-700/60 hover:bg-gray-50/50 dark:hover:bg-gray-755">
                 <td class="py-3 px-3">
-                    <div class="font-medium text-gray-900 dark:text-gray-100">${item.name}</div>
-                    <div class="text-xs text-gray-500 dark:text-gray-400">${item.unit || 'Units'}</div>
+                    <div class="font-medium text-gray-900 dark:text-gray-100">${escapeHtml(item.name)}</div>
+                    <div class="text-xs text-gray-500 dark:text-gray-400">${safeUnit}</div>
                     ${packageNote}
                 </td>
                 <td class="py-3 px-3 text-center font-semibold text-gray-700 dark:text-gray-300">
                     ${orderedQty}
-                    ${conversionFactor !== 1 ? `<div class="text-[10px] text-gray-400">(${orderedQty * conversionFactor} base)</div>` : ''}
+                    ${conversionFactor !== 1 ? `<div class="text-[10px] text-gray-400">(${roundQty(orderedQty * conversionFactor)} base)</div>` : ''}
                 </td>
                 <td class="py-3 px-3 text-center text-xs text-gray-500 dark:text-gray-400">
                     ${receivedQty}
@@ -1195,6 +1248,7 @@ export function showReceiveGoodsModal(req) {
                 </td>
                 <td class="py-3 px-3 text-center">
                     <input type="number"
+                        step="any"
                         class="receive-goods-qty-input w-24 p-1.5 text-sm font-bold border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-center focus:ring-emerald-500 focus:border-emerald-500"
                         data-index="${idx}"
                         data-remaining="${remainingQty}"
@@ -1229,24 +1283,24 @@ export function showReceiveGoodsModal(req) {
                 </button>
             </div>
             <form id="receive-goods-form" class="p-6 space-y-4 overflow-y-auto flex-1">
-                <input type="hidden" id="receive-goods-po-id" value="${req.id}">
+                <input type="hidden" id="receive-goods-po-id" value="${escapeHtml(req.id)}">
 
                 <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-emerald-50/60 dark:bg-emerald-950/20 p-3.5 rounded-lg border border-emerald-200/60 dark:border-emerald-900/40 text-xs">
                     <div>
                         <span class="text-gray-500 dark:text-gray-400 block">Purchase Order:</span>
-                        <span class="font-bold text-gray-800 dark:text-gray-200">#${req.id.substring(0, 8)}</span>
+                        <span class="font-bold text-gray-800 dark:text-gray-200">#${escapeHtml(req.id.substring(0, 8))}</span>
                     </div>
                     <div>
                         <span class="text-gray-500 dark:text-gray-400 block">Supplier:</span>
-                        <span class="font-bold text-gray-800 dark:text-gray-200 truncate block" title="${req.supplier || 'Vendor'}">${req.supplier || 'N/A'}</span>
+                        <span class="font-bold text-gray-800 dark:text-gray-200 truncate block" title="${escapeHtml(req.supplier || 'Vendor')}">${escapeHtml(req.supplier || 'N/A')}</span>
                     </div>
                     <div>
                         <span class="text-gray-500 dark:text-gray-400 block">Supplier Ref:</span>
-                        <span class="font-bold text-gray-800 dark:text-gray-200">${req.orderRef || 'N/A'}</span>
+                        <span class="font-bold text-gray-800 dark:text-gray-200">${escapeHtml(req.orderRef || 'N/A')}</span>
                     </div>
                     <div>
                         <span class="text-gray-500 dark:text-gray-400 block">Expected Date:</span>
-                        <span class="font-bold text-gray-800 dark:text-gray-200">${req.expectedDeliveryDate || 'N/A'}</span>
+                        <span class="font-bold text-gray-800 dark:text-gray-200">${escapeHtml(req.expectedDeliveryDate || 'N/A')}</span>
                     </div>
                 </div>
 
@@ -1346,10 +1400,10 @@ export function showStockLogModal(filterItem = null) {
 
     const item = isValidItem ? filterItem : null;
     const isFiltered = !!item;
-    const itemName = item?.name || '';
+    const itemName = escapeHtml(item?.name || '');
     const title = isFiltered ? `Audit Trail: ${itemName}` : `Stock Movement & Usage Audit Trail`;
     const subtitle = isFiltered
-        ? `Movement and adjustment history for <strong>${itemName}</strong> (Category: ${item.category || 'General'} | Current Stock: <strong>${item.stock ?? 0} ${item.unit || ''}</strong>).`
+        ? `Movement and adjustment history for <strong>${itemName}</strong> (Category: ${escapeHtml(item.category || 'General')} | Current Stock: <strong>${Number(item.stock ?? 0)} ${escapeHtml(item.unit || '')}</strong>).`
         : `Real-time log of all items received (Stock In), issued to departments (Stock Out), and inventory recount adjustments.`;
 
     modal.innerHTML = `
@@ -1458,22 +1512,22 @@ export function renderStockMovements(movements) {
 
                     return `
                         <tr class="hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors">
-                            <td class="px-4 py-3 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">${dateStr}</td>
+                            <td class="px-4 py-3 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">${escapeHtml(dateStr)}</td>
                             <td class="px-4 py-3 whitespace-nowrap font-medium text-gray-900 dark:text-gray-100">
-                                ${m.itemName}
-                                <div class="text-[11px] text-gray-400 font-normal">${m.category || ''}</div>
+                                ${escapeHtml(m.itemName)}
+                                <div class="text-[11px] text-gray-400 font-normal">${escapeHtml(m.category || '')}</div>
                             </td>
                             <td class="px-4 py-3 whitespace-nowrap">${badge}</td>
                             <td class="px-4 py-3 whitespace-nowrap">${stockChange}</td>
                             <td class="px-4 py-3 whitespace-nowrap">
-                                <div class="font-medium text-gray-800 dark:text-gray-200">${m.department || 'N/A'}</div>
-                                <div class="text-xs text-gray-500 dark:text-gray-400">${m.recipient || ''}</div>
+                                <div class="font-medium text-gray-800 dark:text-gray-200">${escapeHtml(m.department || 'N/A')}</div>
+                                <div class="text-xs text-gray-500 dark:text-gray-400">${escapeHtml(m.recipient || '')}</div>
                             </td>
-                            <td class="px-4 py-3 text-xs text-gray-600 dark:text-gray-300 max-w-xs truncate" title="${m.reason || ''}">
-                                ${m.reason || 'N/A'}
+                            <td class="px-4 py-3 text-xs text-gray-600 dark:text-gray-300 max-w-xs truncate" title="${escapeHtml(m.reason || '')}">
+                                ${escapeHtml(m.reason || 'N/A')}
                             </td>
                             <td class="px-4 py-3 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">
-                                ${m.issuedByEmail || 'N/A'}
+                                ${escapeHtml(m.issuedByEmail || 'N/A')}
                             </td>
                         </tr>
                     `;
@@ -1492,7 +1546,7 @@ export function showConfirmModal(message, onConfirm) {
     modal.innerHTML = `
         <div class="bg-white rounded-lg shadow-xl w-full max-w-sm transition-colors duration-300">
             <div class="p-6 text-center">
-                <p id="confirm-message" class="mb-4 text-lg">${message}</p>
+                <p id="confirm-message" class="mb-4 text-lg">${escapeHtml(message)}</p>
                 <div class="flex justify-center space-x-4">
                     <button id="confirm-cancel-btn" class="px-6 py-2 border rounded-md text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700 transition-colors">Cancel</button>
                     <button id="confirm-ok-btn" class="px-6 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors">Confirm</button>
@@ -1534,29 +1588,29 @@ export function showRequestDetailsModal(req) {
             : `Issued: ${i.issuedQuantity || 0} / ${i.quantity}`;
         return `
             <tr class="border-b border-gray-150 dark:border-gray-700/60 text-xs">
-                <td class="py-2 px-3 font-medium text-gray-900 dark:text-gray-100">${i.name}</td>
-                <td class="py-2 px-3 text-center text-gray-700 dark:text-gray-300">${i.quantity} ${i.unit || ''}</td>
-                <td class="py-2 px-3 text-right text-gray-600 dark:text-gray-400">Birr ${(i.price || 0).toFixed(2)}</td>
-                <td class="py-2 px-3 text-right font-semibold text-gray-800 dark:text-gray-200">Birr ${((i.price || 0) * (i.quantity || 1)).toFixed(2)}</td>
-                <td class="py-2 px-3 text-center font-semibold text-slate-700 dark:text-slate-300">${progressText}</td>
+                <td class="py-2 px-3 font-medium text-gray-900 dark:text-gray-100">${escapeHtml(i.name)}</td>
+                <td class="py-2 px-3 text-center text-gray-700 dark:text-gray-300">${Number(i.quantity || 0)} ${escapeHtml(i.unit || '')}</td>
+                <td class="py-2 px-3 text-right text-gray-600 dark:text-gray-400">${money(i.price || 0)}</td>
+                <td class="py-2 px-3 text-right font-semibold text-gray-800 dark:text-gray-200">${money((i.price || 0) * (i.quantity || 1))}</td>
+                <td class="py-2 px-3 text-center font-semibold text-slate-700 dark:text-slate-300">${escapeHtml(progressText)}</td>
             </tr>
         `;
     }).join('');
 
     let actionBtnHtml = '';
     if (!isPO && (req.status === 'Approved' || req.status === 'Partially Issued') && hasPermission(state.userRole, 'manage_inventory')) {
-        actionBtnHtml = `<button type="button" class="modal-detail-action-issue-btn px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-semibold transition-colors shadow flex items-center" data-id="${req.id}"><i class="fas fa-hand-holding-box mr-1.5"></i>Issue Items</button>`;
-    } else if (isPO && req.status === 'Approved' && (state.userRole === 'Purchasing' || state.userRole === 'System Administrator' || hasPermission(state.userRole, 'create_request'))) {
-        actionBtnHtml = `<button type="button" class="modal-detail-action-order-btn px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded text-sm font-semibold transition-colors shadow flex items-center" data-id="${req.id}"><i class="fas fa-shopping-cart mr-1.5"></i>Place Order</button>`;
+        actionBtnHtml = `<button type="button" class="modal-detail-action-issue-btn px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-semibold transition-colors shadow flex items-center" data-id="${escapeHtml(req.id)}"><i class="fas fa-hand-holding-box mr-1.5"></i>Issue Items</button>`;
+    } else if (isPO && req.status === 'Approved' && (state.userRole === 'Purchasing' || state.userRole === 'System Administrator')) {
+        actionBtnHtml = `<button type="button" class="modal-detail-action-order-btn px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded text-sm font-semibold transition-colors shadow flex items-center" data-id="${escapeHtml(req.id)}"><i class="fas fa-shopping-cart mr-1.5"></i>Place Order</button>`;
     } else if (isPO && (req.status === 'Ordered' || req.status === 'Partially Received') && hasPermission(state.userRole, 'manage_inventory')) {
-        actionBtnHtml = `<button type="button" class="modal-detail-action-receive-btn px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-sm font-semibold transition-colors shadow flex items-center" data-id="${req.id}"><i class="fas fa-truck-loading mr-1.5"></i>Receive Goods into Store</button>`;
+        actionBtnHtml = `<button type="button" class="modal-detail-action-receive-btn px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-sm font-semibold transition-colors shadow flex items-center" data-id="${escapeHtml(req.id)}"><i class="fas fa-truck-loading mr-1.5"></i>Receive Goods into Store</button>`;
     }
 
     modal.innerHTML = `
         <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-2xl transition-colors duration-300 relative overflow-hidden mx-4 max-h-[90vh] flex flex-col">
             <div class="p-5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750">
                 <div class="flex items-center space-x-2">
-                    <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100">Request #${req.id.substring(0, 8)}</h3>
+                    <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100">Request #${escapeHtml(req.id.substring(0, 8))}</h3>
                     ${typeBadge}
                 </div>
                 <button id="close-request-details-modal-btn" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" aria-label="Close details modal"><i class="fas fa-times"></i></button>
@@ -1565,7 +1619,7 @@ export function showRequestDetailsModal(req) {
                 <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-gray-50 dark:bg-gray-750 p-3.5 rounded-lg border border-gray-200 dark:border-gray-700 text-xs">
                     <div>
                         <span class="text-gray-500 dark:text-gray-400 block">Department</span>
-                        <span class="font-bold text-gray-900 dark:text-gray-100">${req.department}</span>
+                        <span class="font-bold text-gray-900 dark:text-gray-100">${escapeHtml(req.department)}</span>
                     </div>
                     <div>
                         <span class="text-gray-500 dark:text-gray-400 block">Status</span>
@@ -1573,35 +1627,35 @@ export function showRequestDetailsModal(req) {
                     </div>
                     <div>
                         <span class="text-gray-500 dark:text-gray-400 block">Priority</span>
-                        <span class="font-bold text-gray-900 dark:text-gray-100">${req.priority}</span>
+                        <span class="font-bold text-gray-900 dark:text-gray-100">${escapeHtml(req.priority)}</span>
                     </div>
                     <div>
                         <span class="text-gray-500 dark:text-gray-400 block">Total Estimated</span>
-                        <span class="font-extrabold text-gray-900 dark:text-gray-100">Birr ${(req.totalCost || 0).toFixed(2)}</span>
+                        <span class="font-extrabold text-gray-900 dark:text-gray-100">${money(req.totalCost || 0)}</span>
                     </div>
                 </div>
 
                 <div class="text-xs space-y-1 text-gray-600 dark:text-gray-300">
-                    <div><span class="font-semibold text-gray-800 dark:text-gray-200">Requested By:</span> ${req.createdByEmail || 'N/A'}</div>
-                    <div><span class="font-semibold text-gray-800 dark:text-gray-200">Required By Date:</span> ${req.requiredBy || 'N/A'}</div>
-                    ${req.createdAt?.toDate ? `<div><span class="font-semibold text-gray-800 dark:text-gray-200">Created:</span> ${req.createdAt.toDate().toLocaleString()}</div>` : ''}
-                    <div><span class="font-semibold text-gray-800 dark:text-gray-200">Notes:</span> ${req.notes || 'None'}</div>
+                    <div><span class="font-semibold text-gray-800 dark:text-gray-200">Requested By:</span> ${escapeHtml(req.createdByEmail || 'N/A')}</div>
+                    <div><span class="font-semibold text-gray-800 dark:text-gray-200">Required By Date:</span> ${escapeHtml(req.requiredBy || 'N/A')}</div>
+                    ${req.createdAt?.toDate ? `<div><span class="font-semibold text-gray-800 dark:text-gray-200">Created:</span> ${escapeHtml(req.createdAt.toDate().toLocaleString())}</div>` : ''}
+                    <div><span class="font-semibold text-gray-800 dark:text-gray-200">Notes:</span> ${escapeHtml(req.notes || 'None')}</div>
                 </div>
 
                 ${isPO && (req.supplier || req.expectedDeliveryDate) ? `
                     <div class="bg-purple-50/70 dark:bg-purple-950/20 p-3 rounded-lg border border-purple-200/60 dark:border-purple-900/40 text-xs space-y-1">
                         <div class="font-bold text-purple-900 dark:text-purple-300">Vendor Purchase Details:</div>
-                        <div><span class="font-semibold">Supplier:</span> ${req.supplier || 'N/A'}</div>
-                        <div><span class="font-semibold">Order / Quote Ref:</span> ${req.orderRef || 'N/A'}</div>
-                        <div><span class="font-semibold">Expected Delivery:</span> ${req.expectedDeliveryDate || 'N/A'}</div>
-                        ${req.purchasingNotes ? `<div><span class="font-semibold">Purchasing Notes:</span> ${req.purchasingNotes}</div>` : ''}
+                        <div><span class="font-semibold">Supplier:</span> ${escapeHtml(req.supplier || 'N/A')}</div>
+                        <div><span class="font-semibold">Order / Quote Ref:</span> ${escapeHtml(req.orderRef || 'N/A')}</div>
+                        <div><span class="font-semibold">Expected Delivery:</span> ${escapeHtml(req.expectedDeliveryDate || 'N/A')}</div>
+                        ${req.purchasingNotes ? `<div><span class="font-semibold">Purchasing Notes:</span> ${escapeHtml(req.purchasingNotes)}</div>` : ''}
                     </div>
                 ` : ''}
 
                 ${req.approvalNotes ? `
                     <div class="bg-blue-50/70 dark:bg-blue-950/20 p-3 rounded-lg border border-blue-200/60 dark:border-blue-900/40 text-xs">
                         <span class="font-bold text-blue-900 dark:text-blue-300">GM Approval Notes:</span>
-                        <p class="text-gray-700 dark:text-gray-300 mt-0.5">${req.approvalNotes}</p>
+                        <p class="text-gray-700 dark:text-gray-300 mt-0.5">${escapeHtml(req.approvalNotes)}</p>
                     </div>
                 ` : ''}
 
@@ -1625,9 +1679,14 @@ export function showRequestDetailsModal(req) {
                     </div>
                 </div>
             </div>
-            <div class="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-750 flex justify-between items-center">
+            <div class="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-750 flex flex-wrap justify-between items-center gap-2">
                 <button type="button" id="footer-close-details-btn" class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">Close</button>
-                ${actionBtnHtml}
+                <div class="flex flex-wrap items-center gap-2">
+                    <button type="button" class="download-voucher-pdf-btn px-3.5 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 text-slate-700 dark:text-gray-200 rounded text-sm font-semibold transition-colors shadow-sm flex items-center" data-id="${escapeHtml(req.id)}">
+                        <i class="fas fa-print mr-1.5 text-slate-600 dark:text-slate-300"></i>${isPO ? 'Print / PDF PO' : 'Print / PDF Slip'}
+                    </button>
+                    ${actionBtnHtml}
+                </div>
             </div>
         </div>
     `;
@@ -1682,6 +1741,7 @@ export function addRequestItemRow() {
     itemRow.dataset.conversionFactor = "1";
     itemRow.dataset.inStore = "false";
     itemRow.dataset.storeStock = "0";
+    const curr = escapeHtml(getHotelSettings().currency);
     itemRow.innerHTML = `
         <div class="col-span-12 md:col-span-4">
             <label class="block md:hidden text-xs font-semibold text-gray-500 mb-1">Item Name</label>
@@ -1690,22 +1750,22 @@ export function addRequestItemRow() {
         </div>
         <div class="col-span-6 md:col-span-2">
             <label class="block md:hidden text-xs font-semibold text-gray-500 mb-1">Quantity</label>
-            <input type="number" min="1" value="1" class="item-quantity w-full p-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md transition-colors duration-300 text-sm text-center" required>
+            <input type="number" step="any" min="0.01" value="1" class="item-quantity w-full p-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md transition-colors duration-300 text-sm text-center" required>
         </div>
         <div class="col-span-6 md:col-span-2">
             <label class="block md:hidden text-xs font-semibold text-gray-500 mb-1">Unit</label>
             <select class="item-unit w-full p-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md transition-colors duration-300 text-sm">
-                ${UNITS.map(u => `<option value="${u}">${u}</option>`).join('')}
+                ${UNITS.map(u => `<option value="${escapeHtml(u)}">${escapeHtml(u)}</option>`).join('')}
             </select>
             <div class="item-unit-note text-[10px] text-blue-600 dark:text-blue-400 mt-0.5 hidden truncate font-medium"></div>
         </div>
         <div class="col-span-6 md:col-span-2">
-            <label class="block md:hidden text-xs font-semibold text-gray-500 mb-1">Unit Price (Birr)</label>
+            <label class="block md:hidden text-xs font-semibold text-gray-500 mb-1">Unit Price (${curr})</label>
             <input type="number" step="0.01" min="0" value="0.00" class="item-price w-full p-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md transition-colors duration-300 text-sm text-right" required>
         </div>
         <div class="col-span-4 md:col-span-1 text-right pt-2">
             <label class="block md:hidden text-xs font-semibold text-gray-500 mb-1">Subtotal</label>
-            <span class="item-subtotal block p-1 text-gray-900 dark:text-gray-100 font-semibold text-sm">Birr 0.00</span>
+            <span class="item-subtotal block p-1 text-gray-900 dark:text-gray-100 font-semibold text-sm">${money(0)}</span>
         </div>
         <div class="col-span-2 md:col-span-1 flex justify-center items-center pt-2">
             <button type="button" class="remove-item-btn p-2 text-red-500 hover:text-red-700 transition-colors" title="Remove row" aria-label="Remove item"><i class="fas fa-trash"></i></button>
@@ -1769,10 +1829,10 @@ export function handleItemRowNameChange(row) {
             const stock = Number(invItem.stock || 0);
             if (stock > 0) {
                 stockHint.className = 'item-stock-hint text-[11px] mt-1 font-medium text-emerald-600 dark:text-emerald-400';
-                stockHint.innerHTML = `<i class="fas fa-check-circle mr-1"></i> In Store: <strong>${stock} ${invItem.unit || 'units'}</strong> available`;
+                stockHint.innerHTML = `<i class="fas fa-check-circle mr-1"></i> In Store: <strong>${stock} ${escapeHtml(invItem.unit || 'units')}</strong> available`;
             } else {
                 stockHint.className = 'item-stock-hint text-[11px] mt-1 font-medium text-red-600 dark:text-red-400';
-                stockHint.innerHTML = `<i class="fas fa-times-circle mr-1"></i> <span class="font-bold">Out of Stock (0 ${invItem.unit || ''})</span> — Restock via Purchase Order`;
+                stockHint.innerHTML = `<i class="fas fa-times-circle mr-1"></i> <span class="font-bold">Out of Stock (0 ${escapeHtml(invItem.unit || '')})</span> — Restock via Purchase Order`;
             }
         }
     } else {
@@ -1845,28 +1905,28 @@ export function populateItemNameDatalist() {
     const datalist = document.getElementById('inventory-items-list');
     if (datalist) {
         datalist.innerHTML = (state.inventoryItemsCache || []).map(item => {
-            const stockInfo = `${item.stock || 0} ${item.unit || ''} in store`;
-            const priceInfo = item.price ? ` — Birr ${Number(item.price).toFixed(2)}` : '';
-            return `<option value="${item.name}">${stockInfo}${priceInfo}</option>`;
+            const stockInfo = `${Number(item.stock || 0)} ${escapeHtml(item.unit || '')} in store`;
+            const priceInfo = item.price ? ` — ${money(item.price)}` : '';
+            return `<option value="${escapeHtml(item.name)}">${stockInfo}${escapeHtml(priceInfo)}</option>`;
         }).join('');
     }
 }
 
 export function updateItemSubtotal(row) {
     const price = parseFloat(row.querySelector('.item-price').value) || 0;
-    const quantity = parseInt(row.querySelector('.item-quantity').value) || 0;
+    const quantity = parseFloat(row.querySelector('.item-quantity').value) || 0;
     const subtotal = price * quantity;
-    row.querySelector('.item-subtotal').textContent = `Birr ${subtotal.toFixed(2)}`;
+    row.querySelector('.item-subtotal').textContent = money(subtotal);
     updateTotalCost();
 }
 
 export function updateTotalCost() {
     const total = Array.from(document.querySelectorAll('#items-container .item-row')).reduce((acc, row) => {
         const price = parseFloat(row.querySelector('.item-price').value) || 0;
-        const quantity = parseInt(row.querySelector('.item-quantity').value) || 0;
+        const quantity = parseFloat(row.querySelector('.item-quantity').value) || 0;
         return acc + (price * quantity);
     }, 0);
-    document.getElementById('total-cost-display').textContent = `Birr ${total.toFixed(2)}`;
+    document.getElementById('total-cost-display').textContent = money(total);
 }
 
 // ============================================================================
@@ -1894,9 +1954,9 @@ export function renderDashboard(requests, filterStatus = null) {
         emptyState.classList.add('hidden');
         tableBody.innerHTML = requestsToDisplay.map(req => `
             <tr class="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">${req.id.substring(0, 8)}...</td>
-                <td class="px-6 py-4 whitespace-nowrap text-gray-800 dark:text-gray-200">${req.department}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-gray-800 dark:text-gray-200">${req.items.length} items</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">${escapeHtml(req.id.substring(0, 8))}...</td>
+                <td class="px-6 py-4 whitespace-nowrap text-gray-800 dark:text-gray-200">${escapeHtml(req.department)}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-gray-800 dark:text-gray-200">${(req.items || []).length} items</td>
                 <td class="px-6 py-4 whitespace-nowrap">${getStatusBadge(req.status)}</td>
             </tr>
         `).join('');
@@ -1948,7 +2008,7 @@ export function renderDashboardCharts(requests) {
         data.push(0);
     }
     requests.forEach(req => {
-        if (req.createdAt) {
+        if (req.createdAt && typeof req.createdAt.toDate === 'function') {
             const reqDate = req.createdAt.toDate();
             const monthYear = reqDate.toLocaleString('default', { month: 'short', year: 'numeric' });
             const index = labels.indexOf(monthYear);
@@ -2069,17 +2129,17 @@ export function renderMyRequests(requests, searchTerm = '') {
                 : '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-200 border border-blue-300 dark:border-blue-700" title="Department Requisition (Stock Out)"><i class="fas fa-hand-holding-box mr-1"></i>Requisition</span>';
 
             const itemsSummary = req.items && req.items.length > 0
-                ? `${req.items.map(i => `${i.quantity}x ${i.name}`).slice(0, 2).join(', ')}${req.items.length > 2 ? ` (+${req.items.length - 2})` : ''}`
+                ? `${req.items.map(i => `${Number(i.quantity || 0)}x ${i.name}`).slice(0, 2).join(', ')}${req.items.length > 2 ? ` (+${req.items.length - 2})` : ''}`
                 : 'No items';
 
-            const viewBtn = `<button class="view-request-btn px-2.5 py-1 bg-hotel-accent hover:bg-blue-600 text-white rounded text-xs transition-colors inline-flex items-center shadow-sm mr-1.5" data-id="${req.id}"><i class="fas fa-eye mr-1"></i>View</button>`;
+            const viewBtn = `<button class="view-request-btn px-2.5 py-1 bg-hotel-accent hover:bg-blue-600 text-white rounded text-xs transition-colors inline-flex items-center shadow-sm mr-1.5" data-id="${escapeHtml(req.id)}"><i class="fas fa-eye mr-1"></i>View</button>`;
 
             let contextualAction = '';
             if (!po) {
                 // Flow A: Requisition
                 if ((req.status === 'Approved' || req.status === 'Partially Issued')) {
                     if (hasPermission(state.userRole, 'manage_inventory')) {
-                        contextualAction = `<button class="issue-req-btn px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs transition-colors inline-flex items-center shadow-sm" data-id="${req.id}" title="Issue items to department (decreases store stock)"><i class="fas fa-hand-holding-box mr-1"></i>Issue Items</button>`;
+                        contextualAction = `<button class="issue-req-btn px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs transition-colors inline-flex items-center shadow-sm" data-id="${escapeHtml(req.id)}" title="Issue items to department (decreases store stock)"><i class="fas fa-hand-holding-box mr-1"></i>Issue Items</button>`;
                     } else {
                         contextualAction = `<span class="text-xs text-amber-700 dark:text-amber-400 italic">Awaiting Storekeeper</span>`;
                     }
@@ -2089,14 +2149,14 @@ export function renderMyRequests(requests, searchTerm = '') {
             } else {
                 // Flow B: Purchase Order
                 if (req.status === 'Approved') {
-                    if (state.userRole === 'Purchasing' || state.userRole === 'System Administrator' || hasPermission(state.userRole, 'create_request')) {
-                        contextualAction = `<button class="order-po-btn px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded text-xs transition-colors inline-flex items-center shadow-sm" data-id="${req.id}" title="Place order with vendor"><i class="fas fa-shopping-cart mr-1"></i>Place Order</button>`;
+                    if (state.userRole === 'Purchasing' || state.userRole === 'System Administrator') {
+                        contextualAction = `<button class="order-po-btn px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded text-xs transition-colors inline-flex items-center shadow-sm" data-id="${escapeHtml(req.id)}" title="Place order with vendor"><i class="fas fa-shopping-cart mr-1"></i>Place Order</button>`;
                     } else {
                         contextualAction = `<span class="text-xs text-purple-700 dark:text-purple-400 italic">Awaiting Purchasing</span>`;
                     }
                 } else if (req.status === 'Ordered' || req.status === 'Partially Received') {
                     if (hasPermission(state.userRole, 'manage_inventory')) {
-                        contextualAction = `<button class="receive-po-goods-btn px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs transition-colors inline-flex items-center shadow-sm" data-id="${req.id}" title="Receive goods into store (increases stock)"><i class="fas fa-truck-loading mr-1"></i>Receive Goods</button>`;
+                        contextualAction = `<button class="receive-po-goods-btn px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs transition-colors inline-flex items-center shadow-sm" data-id="${escapeHtml(req.id)}" title="Receive goods into store (increases stock)"><i class="fas fa-truck-loading mr-1"></i>Receive Goods</button>`;
                     } else {
                         contextualAction = `<span class="text-xs text-blue-700 dark:text-blue-400 italic">Awaiting Store Goods</span>`;
                     }
@@ -2108,23 +2168,23 @@ export function renderMyRequests(requests, searchTerm = '') {
             return `
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
                     <td class="px-4 py-3 whitespace-nowrap text-xs text-gray-600 dark:text-gray-300">
-                        ${req.createdAt?.toDate ? req.createdAt.toDate().toLocaleDateString() : 'N/A'}
+                        ${req.createdAt?.toDate ? escapeHtml(req.createdAt.toDate().toLocaleDateString()) : 'N/A'}
                     </td>
                     <td class="px-4 py-3 whitespace-nowrap">
                         ${typeBadge}
                     </td>
                     <td class="px-4 py-3 whitespace-nowrap">
-                        <div class="font-medium text-gray-900 dark:text-gray-100">${req.department}</div>
-                        <div class="text-[11px] text-gray-500 dark:text-gray-400 truncate max-w-[140px]" title="${req.createdByEmail || ''}">${req.createdByEmail || ''}</div>
+                        <div class="font-medium text-gray-900 dark:text-gray-100">${escapeHtml(req.department)}</div>
+                        <div class="text-[11px] text-gray-500 dark:text-gray-400 truncate max-w-[140px]" title="${escapeHtml(req.createdByEmail || '')}">${escapeHtml(req.createdByEmail || '')}</div>
                     </td>
-                    <td class="px-4 py-3 text-xs text-gray-700 dark:text-gray-300 max-w-[180px] truncate" title="${itemsSummary}">
-                        ${itemsSummary}
+                    <td class="px-4 py-3 text-xs text-gray-700 dark:text-gray-300 max-w-[180px] truncate" title="${escapeHtml(itemsSummary)}">
+                        ${escapeHtml(itemsSummary)}
                     </td>
                     <td class="px-4 py-3 whitespace-nowrap text-xs font-bold text-gray-900 dark:text-gray-100">
-                        Birr ${(req.totalCost || 0).toFixed(2)}
+                        ${money(req.totalCost || 0)}
                     </td>
                     <td class="px-4 py-3 whitespace-nowrap text-xs">
-                        <span class="font-semibold text-gray-700 dark:text-gray-300">${req.priority}</span>
+                        <span class="font-semibold text-gray-700 dark:text-gray-300">${escapeHtml(req.priority)}</span>
                     </td>
                     <td class="px-4 py-3 whitespace-nowrap">
                         ${getStatusBadge(req.status)}
@@ -2163,21 +2223,21 @@ export function renderApprovals(requests) {
                 ? '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-200 border border-emerald-300 dark:border-emerald-700"><i class="fas fa-truck-loading mr-1"></i>Purchase Order (Vendor Stock In)</span>'
                 : '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-200 border border-blue-300 dark:border-blue-700"><i class="fas fa-hand-holding-box mr-1"></i>Dept Requisition (Store Stock Out)</span>';
 
-            const itemsList = (req.items || []).map(i => `<li>${i.name} - ${i.quantity} ${i.unit || ''} (@ Birr ${(i.price || 0).toFixed(2)})</li>`).join('');
+            const itemsList = (req.items || []).map(i => `<li>${escapeHtml(i.name)} - ${Number(i.quantity || 0)} ${escapeHtml(i.unit || '')} (@ ${money(i.price || 0)})</li>`).join('');
             const requestedByEmail = state.allUsersCache.find(u => u.id === req.createdBy)?.email || req.createdByEmail || 'N/A';
             return `
                 <div class="approval-card border rounded-lg overflow-hidden bg-white dark:bg-gray-800 hover:shadow-md transition-shadow duration-200">
                     <div class="bg-gray-50 dark:bg-gray-750 px-4 py-3 flex flex-wrap justify-between items-center gap-2 border-b border-gray-200 dark:border-gray-700">
                         <div class="flex items-center space-x-3">
-                            <span class="font-bold text-gray-900 dark:text-gray-100">${req.department}</span>
+                            <span class="font-bold text-gray-900 dark:text-gray-100">${escapeHtml(req.department)}</span>
                             ${typeBanner}
                         </div>
                         <div class="flex items-center space-x-2 text-xs text-gray-500 dark:text-gray-400">
-                            <span>Requested by: <strong class="text-gray-700 dark:text-gray-300">${requestedByEmail}</strong></span>
+                            <span>Requested by: <strong class="text-gray-700 dark:text-gray-300">${escapeHtml(requestedByEmail)}</strong></span>
                             <span>•</span>
-                            <span>Required: <strong class="text-gray-700 dark:text-gray-300">${req.requiredBy || 'N/A'}</strong></span>
+                            <span>Required: <strong class="text-gray-700 dark:text-gray-300">${escapeHtml(req.requiredBy || 'N/A')}</strong></span>
                             <span>•</span>
-                            <span class="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800 dark:bg-blue-700 dark:text-blue-200 font-semibold">${req.priority}</span>
+                            <span class="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800 dark:bg-blue-700 dark:text-blue-200 font-semibold">${escapeHtml(req.priority)}</span>
                         </div>
                     </div>
                     <div class="p-4">
@@ -2185,18 +2245,18 @@ export function renderApprovals(requests) {
                             <div>
                                 <h4 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Items Requested</h4>
                                 <ul class="list-disc pl-5 text-sm text-gray-700 dark:text-gray-300 space-y-0.5">${itemsList}</ul>
-                                <p class="font-extrabold text-sm text-gray-900 dark:text-gray-100 mt-2">Total Estimated: Birr ${(req.totalCost || 0).toFixed(2)}</p>
+                                <p class="font-extrabold text-sm text-gray-900 dark:text-gray-100 mt-2">Total Estimated: ${money(req.totalCost || 0)}</p>
                             </div>
                             <div>
                                 <h4 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Notes & Justification</h4>
-                                <p class="text-sm text-gray-700 dark:text-gray-300 italic">${req.notes || 'No notes provided.'}</p>
+                                <p class="text-sm text-gray-700 dark:text-gray-300 italic">${escapeHtml(req.notes || 'No notes provided.')}</p>
                             </div>
                             <div>
                                 <h4 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">General Manager Decision</h4>
-                                <textarea data-id="${req.id}" class="approval-notes-input w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 resize-none mb-2" rows="2" placeholder="Optional approval / rejection instructions..."></textarea>
+                                <textarea data-id="${escapeHtml(req.id)}" class="approval-notes-input w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 resize-none mb-2" rows="2" placeholder="Optional approval / rejection instructions..."></textarea>
                                 <div class="flex space-x-2">
-                                    <button data-id="${req.id}" class="approve-btn flex-1 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-md text-sm font-semibold transition-colors shadow-sm"><i class="fas fa-check mr-1"></i>Approve</button>
-                                    <button data-id="${req.id}" class="reject-btn flex-1 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md text-sm font-semibold transition-colors shadow-sm"><i class="fas fa-times mr-1"></i>Reject</button>
+                                    <button data-id="${escapeHtml(req.id)}" class="approve-btn flex-1 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-md text-sm font-semibold transition-colors shadow-sm"><i class="fas fa-check mr-1"></i>Approve</button>
+                                    <button data-id="${escapeHtml(req.id)}" class="reject-btn flex-1 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md text-sm font-semibold transition-colors shadow-sm"><i class="fas fa-times mr-1"></i>Reject</button>
                                 </div>
                             </div>
                         </div>
@@ -2222,13 +2282,15 @@ export function renderInventory(items, searchTerm = '') {
     if (searchTerm) {
         const lc = searchTerm.toLowerCase();
         itemsToDisplay = itemsToDisplay.filter(item =>
-            item.name.toLowerCase().includes(lc) || item.category.toLowerCase().includes(lc)
+            (item.name || '').toLowerCase().includes(lc) || (item.category || '').toLowerCase().includes(lc)
         );
     }
 
     itemsToDisplay.sort((a, b) => {
-        const aVal = typeof a[state.inventorySortColumn] === 'string' ? a[state.inventorySortColumn].toLowerCase() : a[state.inventorySortColumn];
-        const bVal = typeof b[state.inventorySortColumn] === 'string' ? b[state.inventorySortColumn].toLowerCase() : b[state.inventorySortColumn];
+        const rawA = a[state.inventorySortColumn] ?? '';
+        const rawB = b[state.inventorySortColumn] ?? '';
+        const aVal = typeof rawA === 'string' ? rawA.toLowerCase() : Number(rawA || 0);
+        const bVal = typeof rawB === 'string' ? rawB.toLowerCase() : Number(rawB || 0);
         if (aVal < bVal) return state.inventorySortDirection === 'asc' ? -1 : 1;
         if (aVal > bVal) return state.inventorySortDirection === 'asc' ? 1 : -1;
         return 0;
@@ -2247,33 +2309,34 @@ export function renderInventory(items, searchTerm = '') {
         if (item.stock <= 0) { status = 'Out of Stock'; color = 'red'; }
         else if (item.stock < item.min) { status = 'Low Stock'; color = 'yellow'; }
         else { status = 'In Stock'; color = 'green'; }
+        const safeId = escapeHtml(item.id);
         const actionsHtml = canEdit ? `
             <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-right text-sm">
                 <div class="inline-flex items-center space-x-1">
-                    <button data-id="${item.id}" class="receive-item-btn p-1.5 text-emerald-600 hover:text-emerald-800 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 rounded transition-colors" title="Receive / Fill Store (Stock In)">
+                    <button data-id="${safeId}" class="receive-item-btn p-1.5 text-emerald-600 hover:text-emerald-800 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 rounded transition-colors" title="Receive / Fill Store (Stock In)">
                         <i class="fas fa-arrow-circle-down"></i>
                     </button>
-                    <button data-id="${item.id}" class="issue-item-btn p-1.5 text-blue-600 hover:text-blue-800 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/50 rounded transition-colors" title="Issue / Check Out stock to department" ${item.stock <= 0 ? 'disabled style="opacity: 0.35; cursor: not-allowed;"' : ''}>
+                    <button data-id="${safeId}" class="issue-item-btn p-1.5 text-blue-600 hover:text-blue-800 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/50 rounded transition-colors" title="Issue / Check Out stock to department" ${item.stock <= 0 ? 'disabled style="opacity: 0.35; cursor: not-allowed;"' : ''}>
                         <i class="fas fa-dolly"></i>
                     </button>
-                    <button data-id="${item.id}" class="view-item-history-btn p-1.5 text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 rounded transition-colors" aria-label="View history" title="View Audit Trail & Movement History">
+                    <button data-id="${safeId}" class="view-item-history-btn p-1.5 text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 rounded transition-colors" aria-label="View history" title="View Audit Trail & Movement History">
                         <i class="fas fa-history"></i>
                     </button>
-                    <button data-id="${item.id}" class="edit-item-btn p-1.5 text-hotel-accent hover:text-hotel-secondary hover:bg-amber-50 dark:hover:bg-amber-950/50 rounded transition-colors" aria-label="Edit item" title="Edit Item Details & Adjust Stock">
+                    <button data-id="${safeId}" class="edit-item-btn p-1.5 text-hotel-accent hover:text-hotel-secondary hover:bg-amber-50 dark:hover:bg-amber-950/50 rounded transition-colors" aria-label="Edit item" title="Edit Item Details & Adjust Stock">
                         <i class="fas fa-edit"></i>
                     </button>
-                    <button data-id="${item.id}" class="delete-item-btn p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/50 rounded transition-colors" aria-label="Delete item" title="Delete Item">
+                    <button data-id="${safeId}" class="delete-item-btn p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/50 rounded transition-colors" aria-label="Delete item" title="Delete Item">
                         <i class="fas fa-trash"></i>
                     </button>
                 </div>
             </td>` : '';
         return `
             <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/60 transition-colors">
-                <td class="px-3 md:px-4 py-2.5 font-medium text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title="${item.name}">${item.name}</td>
-                <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-xs text-gray-600 dark:text-gray-300">${item.category}</td>
-                <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-xs font-semibold text-gray-800 dark:text-gray-200">Birr ${(item.price || 0).toFixed(2)}${item.unit ? ' / ' + item.unit : ''}</td>
-                <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-xs font-bold ${item.stock <= 0 ? 'text-red-600' : (item.stock < item.min ? 'text-amber-600' : 'text-emerald-600')}">${item.stock} ${item.unit || ''}</td>
-                <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">${item.min} ${item.unit || ''}</td>
+                <td class="px-3 md:px-4 py-2.5 font-medium text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</td>
+                <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-xs text-gray-600 dark:text-gray-300">${escapeHtml(item.category)}</td>
+                <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-xs font-semibold text-gray-800 dark:text-gray-200">${money(item.price || 0)}${item.unit ? ' / ' + escapeHtml(item.unit) : ''}</td>
+                <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-xs font-bold ${item.stock <= 0 ? 'text-red-600' : (item.stock < item.min ? 'text-amber-600' : 'text-emerald-600')}">${Number(item.stock || 0)} ${escapeHtml(item.unit || '')}</td>
+                <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">${Number(item.min || 0)} ${escapeHtml(item.unit || '')}</td>
                 <td class="px-3 md:px-4 py-2.5 whitespace-nowrap"><span class="px-2 py-0.5 text-[11px] font-semibold rounded-full bg-${color}-100 text-${color}-800 dark:bg-${color}-900/60 dark:text-${color}-200">${status}</span></td>
                 ${actionsHtml}
             </tr>
@@ -2323,12 +2386,14 @@ export function renderReports(requestsToRender) {
         <thead class="bg-gray-50 dark:bg-gray-800"><tr>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider dark:text-gray-400">Period</th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider dark:text-gray-400">Total Requests</th>
-            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider dark:text-gray-400">Approved (Purchased)</th>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider dark:text-gray-400">Approved / Fulfilled</th>
+            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider dark:text-gray-400">Committed Spend</th>
         </tr></thead><tbody>`;
     periods.forEach(period => {
-        const total = requestsToRender.filter(r => r.createdAt?.toDate().getTime() >= period.start).length;
-        const approved = requestsToRender.filter(r => r.status === 'Approved' && r.createdAt?.toDate().getTime() >= period.start).length;
-        summaryHtml += `<tr><td class="px-6 py-4">${period.label}</td><td class="px-6 py-4">${total}</td><td class="px-6 py-4">${approved}</td></tr>`;
+        const inPeriod = requestsToRender.filter(r => (r.createdAt?.toDate ? r.createdAt.toDate().getTime() : 0) >= period.start);
+        const committed = inPeriod.filter(r => COMMITTED_STATUSES.includes(r.status));
+        const totalSpend = committed.reduce((acc, r) => acc + Number(r.totalCost || 0), 0);
+        summaryHtml += `<tr><td class="px-6 py-4">${period.label}</td><td class="px-6 py-4">${inPeriod.length}</td><td class="px-6 py-4">${committed.length}</td><td class="px-6 py-4 text-right font-semibold">${money(totalSpend)}</td></tr>`;
     });
     summaryHtml += '</tbody></table>';
     reportSummaryDiv.innerHTML = summaryHtml;
@@ -2341,7 +2406,7 @@ export function renderReports(requestsToRender) {
             <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider dark:text-gray-400">Requested By</th>
             <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider dark:text-gray-400">Status</th>
         </tr></thead><tbody>`;
-    const sorted = [...requestsToRender].sort((a, b) => (b.createdAt?.toDate().getTime() || 0) - (a.createdAt?.toDate().getTime() || 0));
+    const sorted = [...requestsToRender].sort((a, b) => (b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0) - (a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0));
 
     if (sorted.length === 0) {
         detailedHtml += `<tr><td colspan="5" class="text-center p-4 text-gray-500">No requests found with current filters.</td></tr>`;
@@ -2349,14 +2414,14 @@ export function renderReports(requestsToRender) {
     } else {
         reportsEmptyState.classList.add('hidden');
         sorted.forEach(req => {
-            const date = req.createdAt?.toDate().toLocaleDateString() || 'N/A';
-            const requestedByEmail = state.allUsersCache.find(u => u.id === req.createdBy)?.email || 'N/A';
+            const date = req.createdAt?.toDate ? req.createdAt.toDate().toLocaleDateString() : 'N/A';
+            const requestedByEmail = state.allUsersCache.find(u => u.id === req.createdBy)?.email || req.createdByEmail || 'N/A';
             detailedHtml += `
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-                    <td class="px-4 py-2">${date}</td>
-                    <td class="px-4 py-2">${req.department}</td>
-                    <td class="px-4 py-2">Birr ${(req.totalCost || 0).toFixed(2)}</td>
-                    <td class="px-4 py-2 text-sm text-gray-600 dark:text-gray-300">${requestedByEmail}</td>
+                    <td class="px-4 py-2">${escapeHtml(date)}</td>
+                    <td class="px-4 py-2">${escapeHtml(req.department)}</td>
+                    <td class="px-4 py-2">${money(req.totalCost || 0)}</td>
+                    <td class="px-4 py-2 text-sm text-gray-600 dark:text-gray-300">${escapeHtml(requestedByEmail)}</td>
                     <td class="px-4 py-2">${getStatusBadge(req.status)}</td>
                 </tr>
             `;
@@ -2430,18 +2495,19 @@ export function renderBudgets(budgets, requests) {
 
     const budgetData = currentYearBudgets.map(budget => {
         const [year, month] = budget.month.split('-');
-        const spent = requests
+        const spent = (requests || [])
             .filter(req =>
-                req.status === 'Approved' &&
+                COMMITTED_STATUSES.includes(req.status) &&
                 req.department === budget.department &&
-                req.createdAt &&
+                req.createdAt?.toDate &&
                 req.createdAt.toDate().getFullYear().toString() === year &&
                 (req.createdAt.toDate().getMonth() + 1).toString().padStart(2, '0') === month
             )
-            .reduce((acc, req) => acc + (req.totalCost || 0), 0);
-        const remaining = budget.amount - spent;
-        const percentage = budget.amount > 0 ? (spent / budget.amount) * 100 : 0;
-        return { ...budget, spent, remaining, percentage };
+            .reduce((acc, req) => acc + Number(req.totalCost || 0), 0);
+        const amount = Number(budget.amount || 0);
+        const remaining = amount - spent;
+        const percentage = amount > 0 ? (spent / amount) * 100 : 0;
+        return { ...budget, amount, spent, remaining, percentage };
     });
 
     budgetData.sort((a, b) => a.month.localeCompare(b.month) || a.department.localeCompare(b.department));
@@ -2451,7 +2517,7 @@ export function renderBudgets(budgets, requests) {
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider dark:text-gray-400">Month</th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider dark:text-gray-400">Department</th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider dark:text-gray-400">Allocated</th>
-            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider dark:text-gray-400">Spent</th>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider dark:text-gray-400">Committed / Spent</th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider dark:text-gray-400">Remaining</th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider dark:text-gray-400">Usage</th>
         </tr></thead><tbody class="bg-white divide-y divide-gray-200 dark:bg-gray-800">`;
@@ -2461,11 +2527,11 @@ export function renderBudgets(budgets, requests) {
         const progressColor = b.percentage > 90 ? 'bg-red-500' : (b.percentage > 70 ? 'bg-yellow-500' : 'bg-green-500');
         tableHtml += `
             <tr class="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-                <td class="px-6 py-4 whitespace-nowrap">${b.month}</td>
-                <td class="px-6 py-4 whitespace-nowrap">${b.department}</td>
-                <td class="px-6 py-4 whitespace-nowrap">Birr ${b.amount.toFixed(2)}</td>
-                <td class="px-6 py-4 whitespace-nowrap">Birr ${b.spent.toFixed(2)}</td>
-                <td class="px-6 py-4 whitespace-nowrap ${remainingColor}">Birr ${b.remaining.toFixed(2)}</td>
+                <td class="px-6 py-4 whitespace-nowrap">${escapeHtml(b.month)}</td>
+                <td class="px-6 py-4 whitespace-nowrap">${escapeHtml(b.department)}</td>
+                <td class="px-6 py-4 whitespace-nowrap">${money(b.amount)}</td>
+                <td class="px-6 py-4 whitespace-nowrap">${money(b.spent)}</td>
+                <td class="px-6 py-4 whitespace-nowrap ${remainingColor}">${money(b.remaining)}</td>
                 <td class="px-6 py-4 whitespace-nowrap">
                     <div class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700">
                         <div class="${progressColor} h-2.5 rounded-full" style="width: ${Math.min(b.percentage, 100)}%"></div>
@@ -2520,7 +2586,7 @@ export function renderBudgets(budgets, requests) {
             scales: {
                 y: {
                     beginAtZero: true,
-                    ticks: { callback: function(value) { return 'Birr ' + value; }, color: isDark ? '#e2e8f0' : '#4a5568' },
+                    ticks: { callback: function(value) { return getHotelSettings().currency + ' ' + value; }, color: isDark ? '#e2e8f0' : '#4a5568' },
                     grid: { color: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }
                 },
                 x: {
@@ -2559,8 +2625,8 @@ export function showUserModal(user) {
     if (!modal) return;
 
     const normalizedUserRole = normalizeRole(user.role);
-    const roleOptions = ROLES.map(r => `<option value="${r}" ${r === normalizedUserRole ? 'selected' : ''}>${r}</option>`).join('');
-    const deptOptions = getActiveDepartments().map(d => `<option value="${d}" ${d === user.department ? 'selected' : ''}>${d}</option>`).join('');
+    const roleOptions = ROLES.map(r => `<option value="${escapeHtml(r)}" ${r === normalizedUserRole ? 'selected' : ''}>${escapeHtml(r)}</option>`).join('');
+    const deptOptions = getActiveDepartments().map(d => `<option value="${escapeHtml(d)}" ${d === user.department ? 'selected' : ''}>${escapeHtml(d)}</option>`).join('');
     const userStatus = user.status || 'Active';
 
     modal.innerHTML = `
@@ -2574,10 +2640,10 @@ export function showUserModal(user) {
                 </button>
             </div>
             <form id="edit-user-form" class="p-6 space-y-4">
-                <input type="hidden" id="edit-user-id" value="${user.id}">
+                <input type="hidden" id="edit-user-id" value="${escapeHtml(user.id)}">
                 <div>
                     <label class="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1">Email</label>
-                    <input type="text" value="${user.email}" disabled class="w-full p-2.5 text-sm bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md text-gray-600 dark:text-gray-300 cursor-not-allowed">
+                    <input type="text" value="${escapeHtml(user.email)}" disabled class="w-full p-2.5 text-sm bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md text-gray-600 dark:text-gray-300 cursor-not-allowed">
                 </div>
                 <div>
                     <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Role</label>
@@ -2596,6 +2662,7 @@ export function showUserModal(user) {
                     <select id="edit-user-status" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-hotel-accent focus:border-hotel-accent transition-colors">
                         <option value="Active" ${userStatus === 'Active' ? 'selected' : ''}>Active</option>
                         <option value="Suspended" ${userStatus === 'Suspended' ? 'selected' : ''}>Suspended</option>
+                        <option value="Deleted" ${userStatus === 'Deleted' ? 'selected' : ''}>Revoked / Deleted</option>
                     </select>
                 </div>
                 <div class="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
@@ -2623,14 +2690,19 @@ export function renderUsersTable(users, searchTerm = '') {
     const emptyState = document.getElementById('users-empty');
     if (!tableBody || !emptyState) return;
 
-    let displayUsers = users || state.allUsersCache;
+    let displayUsers = users || state.allUsersCache || [];
+    const showDeleted = !!document.getElementById('show-deleted-users-toggle')?.checked;
+    if (!showDeleted) {
+        displayUsers = displayUsers.filter(u => u.status !== 'Deleted');
+    }
 
     if (searchTerm) {
         const lc = searchTerm.toLowerCase();
         displayUsers = displayUsers.filter(u =>
             (u.email && u.email.toLowerCase().includes(lc)) ||
             (u.role && u.role.toLowerCase().includes(lc)) ||
-            (u.department && u.department.toLowerCase().includes(lc))
+            (u.department && u.department.toLowerCase().includes(lc)) ||
+            (u.status && u.status.toLowerCase().includes(lc))
         );
     }
 
@@ -2644,34 +2716,44 @@ export function renderUsersTable(users, searchTerm = '') {
             const status = user.status || 'Active';
             const statusDot = status === 'Active'
                 ? '<span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 mr-2" title="Active"></span>'
-                : '<span class="inline-block w-2.5 h-2.5 rounded-full bg-red-500 mr-2" title="Suspended"></span>';
+                : (status === 'Deleted'
+                    ? '<span class="inline-block w-2.5 h-2.5 rounded-full bg-gray-400 mr-2" title="Revoked / Deleted"></span>'
+                    : '<span class="inline-block w-2.5 h-2.5 rounded-full bg-red-500 mr-2" title="Suspended"></span>');
+            const statusPill = status === 'Deleted'
+                ? '<span class="ml-2 px-1.5 py-0.5 text-[10px] bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 rounded font-semibold">Revoked</span>'
+                : (status === 'Suspended'
+                    ? '<span class="ml-2 px-1.5 py-0.5 text-[10px] bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 rounded font-semibold">Suspended</span>'
+                    : '');
 
             const createdDate = user.createdAt?.toDate ? user.createdAt.toDate().toLocaleDateString() : 'N/A';
+            const safeId = escapeHtml(user.id);
+            const safeEmail = escapeHtml(user.email);
 
             return `
-                <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors ${status === 'Deleted' ? 'opacity-60' : ''}">
                     <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100 flex items-center">
                         ${statusDot}
-                        <span>${user.email}</span>
+                        <span>${safeEmail}</span>
                         ${isSelf ? '<span class="ml-2 px-1.5 py-0.5 text-xs bg-blue-100 dark:bg-blue-900/60 text-blue-800 dark:text-blue-200 rounded font-normal">You</span>' : ''}
+                        ${statusPill}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm">${getRoleBadge(user.role)}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">
-                        <i class="fas fa-building text-gray-400 mr-1.5 text-xs"></i>${user.department || 'N/A'}
+                        <i class="fas fa-building text-gray-400 mr-1.5 text-xs"></i>${escapeHtml(user.department || 'N/A')}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                        ${createdDate}
+                        ${escapeHtml(createdDate)}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-right font-medium">
                         <div class="flex items-center justify-end space-x-1">
-                            <button class="edit-user-btn p-1.5 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-gray-700 rounded transition-colors" data-id="${user.id}" title="Edit User Role & Department">
+                            <button class="edit-user-btn p-1.5 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-gray-700 rounded transition-colors" data-id="${safeId}" title="Edit User Role, Department & Status">
                                 <i class="fas fa-edit"></i>
                             </button>
-                            <button class="reset-pwd-user-btn p-1.5 text-amber-600 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-gray-700 rounded transition-colors" data-id="${user.id}" data-email="${user.email}" title="Send Password Reset Email">
+                            <button class="reset-pwd-user-btn p-1.5 text-amber-600 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-gray-700 rounded transition-colors" data-id="${safeId}" data-email="${safeEmail}" title="Send Password Reset Email">
                                 <i class="fas fa-key"></i>
                             </button>
-                            ${!isSelf ? `
-                            <button class="delete-user-btn p-1.5 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-gray-700 rounded transition-colors" data-id="${user.id}" data-email="${user.email}" title="Delete User">
+                            ${!isSelf && status !== 'Deleted' ? `
+                            <button class="delete-user-btn p-1.5 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-gray-700 rounded transition-colors" data-id="${safeId}" data-email="${safeEmail}" title="Revoke / Delete User Access">
                                 <i class="fas fa-trash"></i>
                             </button>
                             ` : ''}
@@ -2724,14 +2806,14 @@ export function computeStockReconciliation() {
         const recordById = movementsByItem.get(keyById) || { totalIn: 0, totalOut: 0, count: 0 };
         const recordByName = (keyByName && keyByName !== keyById) ? (movementsByItem.get(keyByName) || { totalIn: 0, totalOut: 0, count: 0 }) : { totalIn: 0, totalOut: 0, count: 0 };
 
-        const totalIn = recordById.totalIn + recordByName.totalIn;
-        const totalOut = recordById.totalOut + recordByName.totalOut;
+        const totalIn = roundQty(recordById.totalIn + recordByName.totalIn);
+        const totalOut = roundQty(recordById.totalOut + recordByName.totalOut);
         const movementCount = recordById.count + recordByName.count;
 
-        const systemStock = Number(item.stock || 0);
-        const computedStock = totalIn - totalOut;
-        const difference = systemStock - computedStock;
-        const isMatch = difference === 0;
+        const systemStock = roundQty(item.stock || 0);
+        const computedStock = roundQty(totalIn - totalOut);
+        const difference = roundQty(systemStock - computedStock);
+        const isMatch = Math.abs(difference) < 0.001;
 
         return {
             id: item.id,
@@ -2964,7 +3046,7 @@ export function renderReconciliationContent() {
                     <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 border border-amber-200 dark:border-amber-800" title="Item has physical stock but no opening movement records">
                         <i class="fas fa-history mr-1 text-[10px]"></i> Needs Baseline
                     </span>
-                    <button data-id="${r.id}" class="set-single-baseline-btn px-2 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-[10px] font-bold transition-colors shadow-sm" title="Create opening balance movement of +${r.systemStock}">
+                    <button data-id="${escapeHtml(r.id)}" class="set-single-baseline-btn px-2 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-[10px] font-bold transition-colors shadow-sm" title="Create opening balance movement of +${r.systemStock}">
                         Set Baseline
                     </button>
                 </div>
@@ -2978,7 +3060,7 @@ export function renderReconciliationContent() {
                     <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-800 dark:bg-red-900/60 dark:text-red-200 border border-red-200 dark:border-red-800">
                         <i class="fas fa-exclamation-triangle mr-1 text-[10px]"></i> Mismatch (${diffDisplay})
                     </span>
-                    <button data-id="${r.id}" class="set-single-baseline-btn px-2 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-[10px] font-bold transition-colors shadow-sm" title="${actionTitle}">
+                    <button data-id="${escapeHtml(r.id)}" class="set-single-baseline-btn px-2 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-[10px] font-bold transition-colors shadow-sm" title="${escapeHtml(actionTitle)}">
                         Reconcile
                     </button>
                 </div>
@@ -2990,8 +3072,8 @@ export function renderReconciliationContent() {
         return `
             <tr class="border-b border-gray-150 dark:border-gray-700/60 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors ${rowBg} text-xs">
                 <td class="px-4 py-3 font-semibold text-gray-900 dark:text-gray-100">
-                    <div>${r.name}</div>
-                    <span class="text-[10px] text-gray-500 dark:text-gray-400 font-normal">Category: ${r.category}</span>
+                    <div>${escapeHtml(r.name)}</div>
+                    <span class="text-[10px] text-gray-500 dark:text-gray-400 font-normal">Category: ${escapeHtml(r.category)}</span>
                 </td>
                 <td class="px-4 py-3 text-center font-bold text-gray-800 dark:text-gray-200 bg-gray-50/50 dark:bg-gray-800/50">
                     ${r.systemStock}
@@ -3045,14 +3127,6 @@ export function downloadStockReconciliationCsv() {
 
         const headers = ['Item Name', 'Category', 'System Stock', 'Total IN (Received)', 'Total OUT (Issued)', 'Computed Stock (IN-OUT)', 'Variance', 'Status'];
 
-        const escCsv = (val) => {
-            const str = String(val ?? '');
-            if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-                return `"${str.replace(/"/g, '""')}"`;
-            }
-            return str;
-        };
-
         const rows = results.map(r => [
             r.name,
             r.category,
@@ -3062,7 +3136,7 @@ export function downloadStockReconciliationCsv() {
             r.computedStock,
             r.difference > 0 ? `+${r.difference}` : r.difference,
             r.isMatch ? 'Balanced' : 'Mismatch'
-        ].map(escCsv).join(','));
+        ].map(safeCsvCell).join(','));
 
         const csvContent = [headers.join(','), ...rows].join('\n');
         const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -3149,14 +3223,14 @@ export function renderNotificationBell() {
         const timeStr = n.createdAt?.toDate ? n.createdAt.toDate().toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Just now';
 
         return `
-            <div class="notification-item p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-colors flex items-start space-x-3 ${isRead ? 'opacity-70' : 'bg-blue-50/40 dark:bg-blue-950/20 font-medium'}" data-id="${n.id}" data-request-id="${n.requestId || ''}">
+            <div class="notification-item p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-colors flex items-start space-x-3 ${isRead ? 'opacity-70' : 'bg-blue-50/40 dark:bg-blue-950/20 font-medium'}" data-id="${escapeHtml(n.id)}" data-request-id="${escapeHtml(n.requestId || '')}">
                 <div class="text-base mt-0.5 flex-shrink-0">${iconHtml}</div>
                 <div class="flex-1 min-w-0">
                     <div class="flex justify-between items-baseline mb-0.5">
-                        <span class="text-xs font-semibold text-gray-800 dark:text-gray-200 truncate">${n.title || 'Notification'}</span>
-                        <span class="text-[10px] text-gray-400 ml-2 whitespace-nowrap">${timeStr}</span>
+                        <span class="text-xs font-semibold text-gray-800 dark:text-gray-200 truncate">${escapeHtml(n.title || 'Notification')}</span>
+                        <span class="text-[10px] text-gray-400 ml-2 whitespace-nowrap">${escapeHtml(timeStr)}</span>
                     </div>
-                    <p class="text-xs text-gray-600 dark:text-gray-300 line-clamp-2 leading-relaxed">${n.message || ''}</p>
+                    <p class="text-xs text-gray-600 dark:text-gray-300 line-clamp-2 leading-relaxed">${escapeHtml(n.message || '')}</p>
                 </div>
                 ${!isRead ? '<span class="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0 mt-1.5" title="Unread"></span>' : ''}
             </div>
@@ -3264,18 +3338,18 @@ export function renderStoreOperations() {
                         <div class="space-y-2 max-h-56 overflow-y-auto pr-1">
                             ${requisitionsToIssue.map(r => {
                                 const itemCount = (r.items || []).length;
-                                const itemsSummary = (r.items || []).slice(0, 2).map(it => `${it.quantity}x ${it.name}`).join(', ') + (itemCount > 2 ? ` +${itemCount - 2} more` : '');
+                                const itemsSummary = (r.items || []).slice(0, 2).map(it => `${Number(it.quantity || 0)}x ${it.name}`).join(', ') + (itemCount > 2 ? ` +${itemCount - 2} more` : '');
                                 return `
                                     <div class="p-2.5 rounded-lg bg-gray-50 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600 flex items-center justify-between text-xs gap-2">
                                         <div class="min-w-0 flex-1">
                                             <div class="flex items-center space-x-1.5 font-semibold text-gray-900 dark:text-gray-100">
-                                                <span>#${r.id.slice(-6).toUpperCase()}</span>
+                                                <span>#${escapeHtml(r.id.slice(-6).toUpperCase())}</span>
                                                 <span class="text-gray-400">•</span>
-                                                <span class="text-emerald-700 dark:text-emerald-300 font-bold">${r.department || 'Hotel'}</span>
+                                                <span class="text-emerald-700 dark:text-emerald-300 font-bold">${escapeHtml(r.department || 'Hotel')}</span>
                                             </div>
-                                            <div class="text-[11px] text-gray-500 dark:text-gray-400 truncate mt-0.5" title="${itemsSummary}">${itemsSummary}</div>
+                                            <div class="text-[11px] text-gray-500 dark:text-gray-400 truncate mt-0.5" title="${escapeHtml(itemsSummary)}">${escapeHtml(itemsSummary)}</div>
                                         </div>
-                                        <button data-id="${r.id}" class="issue-req-btn shrink-0 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md text-xs font-bold flex items-center transition-colors shadow-sm" title="Issue items to department">
+                                        <button data-id="${escapeHtml(r.id)}" class="issue-req-btn shrink-0 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md text-xs font-bold flex items-center transition-colors shadow-sm" title="Issue items to department">
                                             <i class="fas fa-dolly mr-1"></i> Issue Items
                                         </button>
                                     </div>
@@ -3301,18 +3375,18 @@ export function renderStoreOperations() {
                         <div class="space-y-2 max-h-56 overflow-y-auto pr-1">
                             ${posToReceive.map(r => {
                                 const itemCount = (r.items || []).length;
-                                const itemsSummary = (r.items || []).slice(0, 2).map(it => `${it.quantity}x ${it.name}`).join(', ') + (itemCount > 2 ? ` +${itemCount - 2} more` : '');
+                                const itemsSummary = (r.items || []).slice(0, 2).map(it => `${Number(it.quantity || 0)}x ${it.name}`).join(', ') + (itemCount > 2 ? ` +${itemCount - 2} more` : '');
                                 return `
                                     <div class="p-2.5 rounded-lg bg-gray-50 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600 flex items-center justify-between text-xs gap-2">
                                         <div class="min-w-0 flex-1">
                                             <div class="flex items-center space-x-1.5 font-semibold text-gray-900 dark:text-gray-100">
-                                                <span>#${r.id.slice(-6).toUpperCase()}</span>
+                                                <span>#${escapeHtml(r.id.slice(-6).toUpperCase())}</span>
                                                 <span class="text-gray-400">•</span>
-                                                <span class="text-blue-700 dark:text-blue-300 font-bold">${r.supplier || 'Vendor'}</span>
+                                                <span class="text-blue-700 dark:text-blue-300 font-bold">${escapeHtml(r.supplier || 'Vendor')}</span>
                                             </div>
-                                            <div class="text-[11px] text-gray-500 dark:text-gray-400 truncate mt-0.5" title="${itemsSummary}">${itemsSummary}</div>
+                                            <div class="text-[11px] text-gray-500 dark:text-gray-400 truncate mt-0.5" title="${escapeHtml(itemsSummary)}">${escapeHtml(itemsSummary)}</div>
                                         </div>
-                                        <button data-id="${r.id}" class="receive-po-goods-btn shrink-0 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-xs font-bold flex items-center transition-colors shadow-sm" title="Receive delivered goods into store">
+                                        <button data-id="${escapeHtml(r.id)}" class="receive-po-goods-btn shrink-0 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-xs font-bold flex items-center transition-colors shadow-sm" title="Receive delivered goods into store">
                                             <i class="fas fa-truck-loading mr-1"></i> Receive Goods
                                         </button>
                                     </div>
