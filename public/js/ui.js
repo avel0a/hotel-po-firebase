@@ -420,19 +420,24 @@ export function showSection(sectionId) {
         applyHotelBranding();
         renderDepartmentsList();
         renderPermissionsMatrix();
+        renderBackupSectionUI();
     }
 
     if (sectionId === 'reports') {
+        state.reportsUiPage = 1;
         applyReportFilters();
     }
 
-    // Clear search inputs and re-render tables
+    // Clear search inputs, reset UI table pages, and re-render
     const invSearch = document.getElementById('inventory-search');
     if (invSearch) invSearch.value = '';
     const myReqSearch = document.getElementById('my-requests-search');
     if (myReqSearch) myReqSearch.value = '';
     const usersSearch = document.getElementById('users-search');
     if (usersSearch) usersSearch.value = '';
+
+    state.inventoryUiPage = 1;
+    state.myRequestsUiPage = 1;
 
     renderInventory(state.inventoryItemsCache);
     renderMyRequests(state.allRequestsCache);
@@ -1399,6 +1404,8 @@ export function showStockLogModal(filterItem = null) {
         (typeof filterItem.name === 'string' || typeof filterItem.id === 'string');
 
     const item = isValidItem ? filterItem : null;
+    state.stockLogFilterItem = item;
+    state.stockMovementsUiPage = 1;
     const isFiltered = !!item;
     const itemName = escapeHtml(item?.name || '');
     const title = isFiltered ? `Audit Trail: ${itemName}` : `Stock Movement & Usage Audit Trail`;
@@ -1421,6 +1428,7 @@ export function showStockLogModal(filterItem = null) {
             </div>
             <div class="p-4 overflow-y-auto flex-1">
                 <div id="stock-movements-table-container"></div>
+                <div id="stock-movements-pagination" class="mt-3"></div>
             </div>
             <div class="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-750 flex justify-between items-center">
                 <div>
@@ -1435,19 +1443,7 @@ export function showStockLogModal(filterItem = null) {
         </div>
     `;
 
-    const allMovements = state.stockMovementsCache || [];
-    let movementsToDisplay = allMovements;
-    if (isFiltered) {
-        const filterId = item.id;
-        const filterLcName = (item.name || '').trim().toLowerCase();
-        movementsToDisplay = allMovements.filter(m => {
-            const matchesId = filterId && m.itemId === filterId;
-            const matchesName = filterLcName && m.itemName && m.itemName.trim().toLowerCase() === filterLcName;
-            return matchesId || matchesName;
-        });
-    }
-
-    renderStockMovements(movementsToDisplay);
+    renderStockMovements(state.stockMovementsCache || []);
 
     modal.classList.remove('hidden', 'opacity-0', 'invisible');
     modal.classList.add('opacity-100');
@@ -1465,6 +1461,7 @@ export function showStockLogModal(filterItem = null) {
 export function hideStockLogModal() {
     const modal = document.getElementById('stock-log-modal');
     if (!modal) return;
+    state.stockLogFilterItem = null;
     modal.classList.remove('opacity-100');
     modal.classList.add('opacity-0', 'invisible');
     setTimeout(() => modal.classList.add('hidden'), 300);
@@ -1474,7 +1471,18 @@ export function renderStockMovements(movements) {
     const container = document.getElementById('stock-movements-table-container');
     if (!container) return;
 
-    if (!movements || movements.length === 0) {
+    let displayMovements = movements || state.stockMovementsCache || [];
+    if (state.stockLogFilterItem) {
+        const filterId = state.stockLogFilterItem.id;
+        const filterLcName = (state.stockLogFilterItem.name || '').trim().toLowerCase();
+        displayMovements = displayMovements.filter(m => {
+            const matchesId = filterId && m.itemId === filterId;
+            const matchesName = filterLcName && m.itemName && m.itemName.trim().toLowerCase() === filterLcName;
+            return matchesId || matchesName;
+        });
+    }
+
+    if (!displayMovements || displayMovements.length === 0) {
         container.innerHTML = `
             <div class="text-center py-12 text-gray-500 dark:text-gray-400">
                 <i class="fas fa-dolly-flatbed text-4xl mb-3 text-gray-300 dark:text-gray-600"></i>
@@ -1482,8 +1490,23 @@ export function renderStockMovements(movements) {
                 <p class="text-xs text-gray-400 mt-1">When items are received via PO or issued to departments, full records will appear here.</p>
             </div>
         `;
+        renderTablePaginationBar('stock-movements-pagination', {
+            page: 1,
+            pageSize: state.stockMovementsUiPageSize,
+            totalItems: 0,
+            tableKey: 'movements',
+            hasMoreCloud: state.stockMovementsHasMore,
+            loadMoreBtnId: 'load-older-movements-btn',
+            loadMoreLabel: 'Load Older Movements (+500)'
+        });
         return;
     }
+
+    const pageSize = state.stockMovementsUiPageSize || 50;
+    const totalPages = Math.max(1, Math.ceil(displayMovements.length / pageSize));
+    state.stockMovementsUiPage = Math.min(Math.max(1, state.stockMovementsUiPage || 1), totalPages);
+    const startIdx = (state.stockMovementsUiPage - 1) * pageSize;
+    const pageRows = displayMovements.slice(startIdx, startIdx + pageSize);
 
     container.innerHTML = `
         <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
@@ -1499,7 +1522,7 @@ export function renderStockMovements(movements) {
                 </tr>
             </thead>
             <tbody class="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
-                ${movements.map(m => {
+                ${pageRows.map(m => {
                     const dateStr = m.timestamp?.toDate ? m.timestamp.toDate().toLocaleString() : 'Just now';
                     const isOut = m.type === 'OUT';
                     const badge = isOut
@@ -1535,6 +1558,15 @@ export function renderStockMovements(movements) {
             </tbody>
         </table>
     `;
+    renderTablePaginationBar('stock-movements-pagination', {
+        page: state.stockMovementsUiPage,
+        pageSize,
+        totalItems: displayMovements.length,
+        tableKey: 'movements',
+        hasMoreCloud: state.stockMovementsHasMore,
+        loadMoreBtnId: 'load-older-movements-btn',
+        loadMoreLabel: 'Load Older Movements (+500)'
+    });
 }
 
 // ============================================================================
@@ -2120,9 +2152,24 @@ export function renderMyRequests(requests, searchTerm = '') {
     if (displayRequests.length === 0) {
         tableBody.innerHTML = '';
         emptyState.classList.remove('hidden');
+        renderTablePaginationBar('my-requests-pagination', {
+            page: 1,
+            pageSize: state.myRequestsUiPageSize,
+            totalItems: 0,
+            tableKey: 'my-requests',
+            hasMoreCloud: state.requestsHasMore,
+            loadMoreBtnId: 'load-older-requests-btn',
+            loadMoreLabel: 'Load Older Requests (+500)'
+        });
     } else {
         emptyState.classList.add('hidden');
-        tableBody.innerHTML = displayRequests.map(req => {
+        const pageSize = state.myRequestsUiPageSize || 25;
+        const totalPages = Math.max(1, Math.ceil(displayRequests.length / pageSize));
+        state.myRequestsUiPage = Math.min(Math.max(1, state.myRequestsUiPage || 1), totalPages);
+        const startIdx = (state.myRequestsUiPage - 1) * pageSize;
+        const pageRequests = displayRequests.slice(startIdx, startIdx + pageSize);
+
+        tableBody.innerHTML = pageRequests.map(req => {
             const po = isPO(req);
             const typeBadge = po
                 ? '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200 border border-emerald-300 dark:border-emerald-700" title="Vendor Purchase Order (Stock In)"><i class="fas fa-truck-loading mr-1"></i>Purchase</span>'
@@ -2198,6 +2245,15 @@ export function renderMyRequests(requests, searchTerm = '') {
                 </tr>
             `;
         }).join('');
+        renderTablePaginationBar('my-requests-pagination', {
+            page: state.myRequestsUiPage,
+            pageSize,
+            totalItems: displayRequests.length,
+            tableKey: 'my-requests',
+            hasMoreCloud: state.requestsHasMore,
+            loadMoreBtnId: 'load-older-requests-btn',
+            loadMoreLabel: 'Load Older Requests (+500)'
+        });
     }
 }
 
@@ -2299,12 +2355,24 @@ export function renderInventory(items, searchTerm = '') {
     if (itemsToDisplay.length === 0) {
         tableBody.innerHTML = '';
         emptyState.classList.remove('hidden');
+        renderTablePaginationBar('inventory-pagination', {
+            page: 1,
+            pageSize: state.inventoryUiPageSize,
+            totalItems: 0,
+            tableKey: 'inventory'
+        });
         return;
     } else {
         emptyState.classList.add('hidden');
     }
 
-    tableBody.innerHTML = itemsToDisplay.map(item => {
+    const pageSize = state.inventoryUiPageSize || 50;
+    const totalPages = Math.max(1, Math.ceil(itemsToDisplay.length / pageSize));
+    state.inventoryUiPage = Math.min(Math.max(1, state.inventoryUiPage || 1), totalPages);
+    const startIdx = (state.inventoryUiPage - 1) * pageSize;
+    const pageItems = itemsToDisplay.slice(startIdx, startIdx + pageSize);
+
+    tableBody.innerHTML = pageItems.map(item => {
         let status, color;
         if (item.stock <= 0) { status = 'Out of Stock'; color = 'red'; }
         else if (item.stock < item.min) { status = 'Low Stock'; color = 'yellow'; }
@@ -2355,6 +2423,12 @@ export function renderInventory(items, searchTerm = '') {
     }
     renderStoreOperations();
     updateUIVisibility();
+    renderTablePaginationBar('inventory-pagination', {
+        page: state.inventoryUiPage,
+        pageSize,
+        totalItems: itemsToDisplay.length,
+        tableKey: 'inventory'
+    });
 }
 
 // ============================================================================
@@ -2411,9 +2485,26 @@ export function renderReports(requestsToRender) {
     if (sorted.length === 0) {
         detailedHtml += `<tr><td colspan="5" class="text-center p-4 text-gray-500">No requests found with current filters.</td></tr>`;
         reportsEmptyState.classList.remove('hidden');
+        detailedHtml += '</tbody></table>';
+        detailedReportTableDiv.innerHTML = detailedHtml;
+        renderTablePaginationBar('reports-pagination', {
+            page: 1,
+            pageSize: state.reportsUiPageSize,
+            totalItems: 0,
+            tableKey: 'reports',
+            hasMoreCloud: state.requestsHasMore,
+            loadMoreBtnId: 'load-older-requests-btn',
+            loadMoreLabel: 'Load Older Requests (+500)'
+        });
     } else {
         reportsEmptyState.classList.add('hidden');
-        sorted.forEach(req => {
+        const pageSize = state.reportsUiPageSize || 50;
+        const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+        state.reportsUiPage = Math.min(Math.max(1, state.reportsUiPage || 1), totalPages);
+        const startIdx = (state.reportsUiPage - 1) * pageSize;
+        const pageRows = sorted.slice(startIdx, startIdx + pageSize);
+
+        pageRows.forEach(req => {
             const date = req.createdAt?.toDate ? req.createdAt.toDate().toLocaleDateString() : 'N/A';
             const requestedByEmail = state.allUsersCache.find(u => u.id === req.createdBy)?.email || req.createdByEmail || 'N/A';
             detailedHtml += `
@@ -2426,9 +2517,18 @@ export function renderReports(requestsToRender) {
                 </tr>
             `;
         });
+        detailedHtml += '</tbody></table>';
+        detailedReportTableDiv.innerHTML = detailedHtml;
+        renderTablePaginationBar('reports-pagination', {
+            page: state.reportsUiPage,
+            pageSize,
+            totalItems: sorted.length,
+            tableKey: 'reports',
+            hasMoreCloud: state.requestsHasMore,
+            loadMoreBtnId: 'load-older-requests-btn',
+            loadMoreLabel: 'Load Older Requests (+500)'
+        });
     }
-    detailedHtml += '</tbody></table>';
-    detailedReportTableDiv.innerHTML = detailedHtml;
 }
 
 export function applyReportFilters() {
@@ -2843,6 +2943,7 @@ export function showStockReconciliationModal() {
 
     activeReconciliationFilter = 'all';
     activeReconciliationSearch = '';
+    state.reconUiPage = 1;
 
     modal.innerHTML = `
         <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-5xl transition-colors duration-300 overflow-hidden mx-4 max-h-[92vh] flex flex-col">
@@ -2879,6 +2980,9 @@ export function showStockReconciliationModal() {
                     </div>
                 </div>
 
+                <!-- Partial Ledger Notice (shown only when >500 older movements remain in Firestore) -->
+                <div id="recon-ledger-warning"></div>
+
                 <!-- Summary Metrics Cards -->
                 <div id="reconciliation-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
 
@@ -2905,6 +3009,7 @@ export function showStockReconciliationModal() {
 
                 <!-- Reconciliation Results Table Container -->
                 <div id="reconciliation-table-container" class="border border-gray-200 dark:border-gray-700 rounded-lg overflow-x-auto"></div>
+                <div id="recon-pagination" class="mt-2"></div>
             </div>
 
             <!-- Modal Footer -->
@@ -2934,6 +3039,7 @@ export function showStockReconciliationModal() {
             btn.classList.add('bg-white', 'dark:bg-gray-600', 'text-gray-900', 'dark:text-white', 'shadow-sm');
             btn.classList.remove('text-gray-600', 'dark:text-gray-300');
             activeReconciliationFilter = btn.dataset.filter;
+            state.reconUiPage = 1;
             renderReconciliationContent();
         });
     });
@@ -2942,6 +3048,7 @@ export function showStockReconciliationModal() {
     if (searchInput) {
         searchInput.addEventListener('input', (e) => {
             activeReconciliationSearch = e.target.value.trim().toLowerCase();
+            state.reconUiPage = 1;
             renderReconciliationContent();
         });
     }
@@ -2960,6 +3067,26 @@ export function hideStockReconciliationModal() {
 }
 
 export function renderReconciliationContent() {
+    const ledgerWarn = document.getElementById('recon-ledger-warning');
+    if (ledgerWarn) {
+        if (state.stockMovementsHasMore) {
+            const loadedCount = (state.stockMovementsCache || []).length;
+            ledgerWarn.innerHTML = `
+                <div class="bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700 rounded-lg p-3 text-xs text-amber-900 dark:text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div class="flex items-start space-x-2">
+                        <i class="fas fa-database text-amber-600 dark:text-amber-400 mt-0.5"></i>
+                        <span>Currently reconciling against the latest <strong>${loadedCount}</strong> loaded movements. Load the complete movement history before judging historical variances.</span>
+                    </div>
+                    <button type="button" id="recon-load-full-ledger-btn" class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-md font-semibold text-xs whitespace-nowrap shadow-sm">
+                        <i class="fas fa-cloud-download-alt mr-1"></i> Load Full Ledger
+                    </button>
+                </div>
+            `;
+        } else {
+            ledgerWarn.innerHTML = '';
+        }
+    }
+
     const allResults = computeStockReconciliation();
     const mismatchesCount = allResults.filter(r => !r.isMatch).length;
     const matchesCount = allResults.filter(r => r.isMatch).length;
@@ -3028,10 +3155,22 @@ export function renderReconciliationContent() {
                 <p class="text-sm font-semibold">${activeReconciliationFilter === 'mismatch' ? 'No stock mismatches found! All items match their movement ledger.' : 'No inventory items found matching current filters.'}</p>
             </div>
         `;
+        renderTablePaginationBar('recon-pagination', {
+            page: 1,
+            pageSize: state.reconUiPageSize,
+            totalItems: 0,
+            tableKey: 'recon'
+        });
         return;
     }
 
-    const rowsHtml = displayList.map(r => {
+    const reconPageSize = state.reconUiPageSize || 50;
+    const reconTotalPages = Math.max(1, Math.ceil(displayList.length / reconPageSize));
+    state.reconUiPage = Math.min(Math.max(1, state.reconUiPage || 1), reconTotalPages);
+    const reconStart = (state.reconUiPage - 1) * reconPageSize;
+    const pagedList = displayList.slice(reconStart, reconStart + reconPageSize);
+
+    const rowsHtml = pagedList.map(r => {
         const diffDisplay = r.difference > 0 ? `+${r.difference}` : `${r.difference}`;
         const diffColor = r.isMatch
             ? 'text-gray-500 dark:text-gray-400 font-medium'
@@ -3115,6 +3254,12 @@ export function renderReconciliationContent() {
             </tbody>
         </table>
     `;
+    renderTablePaginationBar('recon-pagination', {
+        page: state.reconUiPage,
+        pageSize: reconPageSize,
+        totalItems: displayList.length,
+        tableKey: 'recon'
+    });
 }
 
 export function downloadStockReconciliationCsv() {
@@ -3399,4 +3544,274 @@ export function renderStoreOperations() {
         </div>
     `;
 }
+
+// ============================================================================
+// Shared Table Pagination Bar Helper
+// ============================================================================
+
+export function renderTablePaginationBar(containerId, {
+    page = 1,
+    pageSize = 25,
+    totalItems = 0,
+    tableKey = '',
+    hasMoreCloud = false,
+    loadMoreBtnId = '',
+    loadMoreLabel = 'Load Older Records'
+}) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    if (totalItems === 0 && !hasMoreCloud) {
+        container.innerHTML = '';
+        return;
+    }
+
+    const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+    const safePage = Math.min(Math.max(1, page), totalPages);
+    const startItem = totalItems === 0 ? 0 : (safePage - 1) * pageSize + 1;
+    const endItem = Math.min(totalItems, safePage * pageSize);
+
+    const showPaging = totalItems > pageSize;
+    if (!showPaging && !hasMoreCloud) {
+        container.innerHTML = totalItems > 10
+            ? `<div class="text-xs text-gray-500 dark:text-gray-400 px-1">Showing ${totalItems} record${totalItems === 1 ? '' : 's'}</div>`
+            : '';
+        return;
+    }
+
+    container.innerHTML = `
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 px-1 text-xs text-gray-600 dark:text-gray-300">
+            <div>
+                Showing <strong>${startItem}–${endItem}</strong> of <strong>${totalItems}</strong> loaded${hasMoreCloud ? '+' : ''}
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+                ${hasMoreCloud && loadMoreBtnId ? `
+                    <button type="button" id="${escapeHtml(loadMoreBtnId)}" class="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 rounded font-semibold transition-colors">
+                        <i class="fas fa-cloud-download-alt mr-1"></i>${escapeHtml(loadMoreLabel)}
+                    </button>
+                ` : ''}
+                ${showPaging ? `
+                    <div class="inline-flex items-center rounded border border-gray-200 dark:border-gray-600 overflow-hidden bg-white dark:bg-gray-700">
+                        <button type="button" class="table-page-btn px-2.5 py-1 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors" data-table="${escapeHtml(tableKey)}" data-dir="prev" ${safePage <= 1 ? 'disabled' : ''}>
+                            <i class="fas fa-chevron-left"></i>
+                        </button>
+                        <span class="px-3 py-1 font-semibold border-x border-gray-200 dark:border-gray-600">Page ${safePage} / ${totalPages}</span>
+                        <button type="button" class="table-page-btn px-2.5 py-1 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors" data-table="${escapeHtml(tableKey)}" data-dir="next" ${safePage >= totalPages ? 'disabled' : ''}>
+                            <i class="fas fa-chevron-right"></i>
+                        </button>
+                    </div>
+                ` : ''}
+            </div>
+        </div>
+    `;
+}
+
+// ============================================================================
+// Admin Backup, AES-256 Encryption & Cloudinary UI Rendering
+// ============================================================================
+
+function formatBytesShort(bytes) {
+    const n = Number(bytes || 0);
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+export function updateAdminBackupReminder() {
+    const banner = document.getElementById('admin-backup-reminder');
+    if (!banner) return;
+
+    if (normalizeRole(state.userRole) !== 'System Administrator') {
+        banner.classList.add('hidden');
+        banner.innerHTML = '';
+        return;
+    }
+
+    const cfg = state.backupConfig || {};
+    const thresholdDays = Math.max(1, Number(cfg.backupReminderDays || 7));
+    const lastTs = cfg.lastBackupAt?.toDate
+        ? cfg.lastBackupAt.toDate()
+        : (cfg.lastBackupAtIso ? new Date(cfg.lastBackupAtIso) : null);
+
+    let needsWarning = false;
+    let message = '';
+    if (!lastTs || Number.isNaN(lastTs.getTime())) {
+        needsWarning = true;
+        message = 'No full database backup has been recorded yet. Create an encrypted local or Cloudinary backup in Settings.';
+    } else {
+        const ageDays = (Date.now() - lastTs.getTime()) / (1000 * 60 * 60 * 24);
+        if (ageDays > thresholdDays) {
+            needsWarning = true;
+            message = `Last database backup was ${Math.floor(ageDays)} day(s) ago (threshold: ${thresholdDays} days). Download or sync an encrypted backup.`;
+        }
+    }
+
+    if (!needsWarning) {
+        banner.classList.add('hidden');
+        banner.innerHTML = '';
+        return;
+    }
+
+    banner.classList.remove('hidden');
+    banner.innerHTML = `
+        <div class="bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+            <div class="flex items-start space-x-2.5 text-xs text-amber-900 dark:text-amber-200">
+                <i class="fas fa-shield-alt text-amber-600 dark:text-amber-400 text-base mt-0.5 shrink-0"></i>
+                <div>
+                    <span class="font-bold block text-sm">Admin Backup Reminder</span>
+                    <span>${escapeHtml(message)}</span>
+                </div>
+            </div>
+            <button type="button" id="goto-backup-settings-btn" class="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold whitespace-nowrap shadow-sm">
+                <i class="fas fa-database mr-1.5"></i> Open Backup & Recovery
+            </button>
+        </div>
+    `;
+}
+
+export function renderBackupSectionUI() {
+    const statusBadge = document.getElementById('backup-health-badge');
+    const historyContainer = document.getElementById('backup-history-container');
+    if (!statusBadge && !historyContainer) return;
+
+    const cfg = state.backupConfig || {};
+    const cloudInput = document.getElementById('backup-cloud-name');
+    const presetInput = document.getElementById('backup-upload-preset');
+    const folderInput = document.getElementById('backup-cloud-folder');
+    const daysInput = document.getElementById('backup-reminder-days');
+
+    if (cloudInput && !cloudInput.matches(':focus')) cloudInput.value = cfg.cloudinaryCloudName || '';
+    if (presetInput && !presetInput.matches(':focus')) presetInput.value = cfg.cloudinaryUploadPreset || '';
+    if (folderInput && !folderInput.matches(':focus')) folderInput.value = cfg.cloudinaryFolder || 'hotel-po-backups';
+    if (daysInput && !daysInput.matches(':focus')) daysInput.value = cfg.backupReminderDays || 7;
+
+    if (statusBadge) {
+        const lastTs = cfg.lastBackupAt?.toDate
+            ? cfg.lastBackupAt.toDate()
+            : (cfg.lastBackupAtIso ? new Date(cfg.lastBackupAtIso) : null);
+        const thresholdDays = Math.max(1, Number(cfg.backupReminderDays || 7));
+        if (!lastTs || Number.isNaN(lastTs.getTime())) {
+            statusBadge.className = 'px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-200';
+            statusBadge.textContent = 'No Backup Recorded Yet';
+        } else {
+            const ageDays = (Date.now() - lastTs.getTime()) / (1000 * 60 * 60 * 24);
+            const dateLabel = lastTs.toLocaleString();
+            if (ageDays > thresholdDays) {
+                statusBadge.className = 'px-2.5 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-200';
+                statusBadge.textContent = `Overdue — Last: ${dateLabel}`;
+            } else {
+                statusBadge.className = 'px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200';
+                statusBadge.textContent = `Protected — Last: ${dateLabel}`;
+            }
+        }
+    }
+
+    if (historyContainer) {
+        const logs = state.backupLogsCache || [];
+        if (logs.length === 0) {
+            historyContainer.innerHTML = `<div class="text-center py-6 text-xs text-gray-400">No backup runs recorded yet. Use Local Download or Encrypted Cloudinary Backup above.</div>`;
+        } else {
+            historyContainer.innerHTML = `
+                <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-xs">
+                    <thead class="bg-gray-50 dark:bg-gray-750 text-gray-500 dark:text-gray-400 uppercase">
+                        <tr>
+                            <th class="px-3 py-2 text-left">Date</th>
+                            <th class="px-3 py-2 text-left">Destination</th>
+                            <th class="px-3 py-2 text-left">Security</th>
+                            <th class="px-3 py-2 text-center">Records</th>
+                            <th class="px-3 py-2 text-right">Size</th>
+                            <th class="px-3 py-2 text-left">By</th>
+                            <th class="px-3 py-2 text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-150 dark:divide-gray-700 bg-white dark:bg-gray-800">
+                        ${logs.map(log => {
+                            const dt = log.createdAt?.toDate ? log.createdAt.toDate().toLocaleString() : (log.createdAtIso ? new Date(log.createdAtIso).toLocaleString() : 'Just now');
+                            const isCloud = log.provider === 'cloudinary';
+                            const destBadge = isCloud
+                                ? `<span class="inline-flex items-center px-2 py-0.5 rounded bg-sky-100 text-sky-800 dark:bg-sky-900/50 dark:text-sky-200 font-semibold"><i class="fas fa-cloud mr-1"></i>Cloudinary Raw</span>`
+                                : `<span class="inline-flex items-center px-2 py-0.5 rounded bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200 font-semibold"><i class="fas fa-laptop mr-1"></i>Local File</span>`;
+                            const secBadge = log.encrypted
+                                ? `<span class="inline-flex items-center px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200 font-semibold"><i class="fas fa-lock mr-1"></i>AES-256-GCM</span>`
+                                : `<span class="inline-flex items-center px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-200 font-semibold"><i class="fas fa-unlock mr-1"></i>Plain JSON</span>`;
+                            const cloudAction = isCloud && log.secureUrl
+                                ? `<button type="button" class="restore-cloudinary-log-btn px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-[11px] font-semibold mr-1" data-url="${escapeHtml(log.secureUrl)}"><i class="fas fa-undo mr-1"></i>Load</button>
+                                   <a href="${escapeHtml(log.secureUrl)}" target="_blank" rel="noopener noreferrer" class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-[11px] text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700" title="Download encrypted blob"><i class="fas fa-external-link-alt"></i></a>`
+                                : `<span class="text-gray-400 italic">Saved on Admin PC</span>`;
+                            return `
+                                <tr class="hover:bg-gray-50 dark:hover:bg-gray-750">
+                                    <td class="px-3 py-2 whitespace-nowrap text-gray-700 dark:text-gray-300">${escapeHtml(dt)}</td>
+                                    <td class="px-3 py-2 whitespace-nowrap">${destBadge}</td>
+                                    <td class="px-3 py-2 whitespace-nowrap">${secBadge}</td>
+                                    <td class="px-3 py-2 text-center font-bold text-gray-800 dark:text-gray-200">${Number(log.totalDocs || 0)}</td>
+                                    <td class="px-3 py-2 text-right whitespace-nowrap text-gray-600 dark:text-gray-400">${escapeHtml(formatBytesShort(log.bytes))}</td>
+                                    <td class="px-3 py-2 whitespace-nowrap text-gray-500 dark:text-gray-400">${escapeHtml(log.createdByEmail || 'Admin')}</td>
+                                    <td class="px-3 py-2 text-right whitespace-nowrap">${cloudAction}</td>
+                                </tr>
+                            `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+    }
+}
+
+export function renderRestorePreview() {
+    const container = document.getElementById('restore-preview-container');
+    if (!container) return;
+
+    const pending = state.pendingRestoreData;
+    if (!pending) {
+        container.classList.add('hidden');
+        container.innerHTML = '';
+        return;
+    }
+
+    const summary = pending.summary || {};
+    const counts = summary.counts || {};
+    const colNames = Object.keys(counts);
+
+    container.classList.remove('hidden');
+    container.innerHTML = `
+        <div class="mt-4 p-4 rounded-lg border-2 border-indigo-300 dark:border-indigo-700 bg-indigo-50/70 dark:bg-indigo-950/30 space-y-3 text-xs">
+            <div class="flex flex-wrap justify-between items-center gap-2">
+                <div>
+                    <div class="font-bold text-sm text-indigo-900 dark:text-indigo-200 flex items-center">
+                        <i class="fas fa-check-circle text-emerald-600 mr-1.5"></i> Backup Verified & Ready to Restore
+                    </div>
+                    <div class="text-gray-600 dark:text-gray-300 mt-0.5">
+                        Property: <strong>${escapeHtml(summary.hotelName)}</strong> • Exported: <strong>${escapeHtml(summary.exportedAt ? new Date(summary.exportedAt).toLocaleString() : 'N/A')}</strong> • Source: <strong>${escapeHtml(pending.sourceLabel || 'Backup File')}</strong> ${pending.wasEncrypted ? '• <span class="text-emerald-700 dark:text-emerald-300 font-semibold"><i class="fas fa-lock mr-0.5"></i>AES-256 Verified</span>' : ''}
+                    </div>
+                </div>
+                <button type="button" id="restore-cancel-btn" class="text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 underline">Clear Preview</button>
+            </div>
+
+            <div>
+                <div class="font-semibold text-gray-700 dark:text-gray-200 mb-1.5">Select collections to merge/restore (total ${Number(summary.totalDocs || 0)} documents):</div>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    ${colNames.map(col => `
+                        <label class="flex items-center p-2 rounded bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 cursor-pointer">
+                            <input type="checkbox" class="restore-collection-cb mr-2 rounded text-indigo-600" value="${escapeHtml(col)}" checked>
+                            <span class="font-medium text-gray-800 dark:text-gray-100">${escapeHtml(col)}</span>
+                            <span class="ml-auto text-[11px] font-bold text-indigo-600 dark:text-indigo-400">${Number(counts[col] || 0)}</span>
+                        </label>
+                    `).join('')}
+                </div>
+            </div>
+
+            <div class="p-2.5 rounded bg-white/80 dark:bg-gray-800/70 border border-indigo-200 dark:border-indigo-800 text-[11px] text-gray-600 dark:text-gray-300">
+                <i class="fas fa-info-circle text-indigo-500 mr-1"></i>
+                Existing documents are safely merged cleanly; immutable <code>stock_movements</code> entries already in Firestore are preserved untouched (only missing ledger entries are inserted).
+            </div>
+
+            <div class="flex justify-end">
+                <button type="button" id="restore-execute-btn" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg text-xs shadow-sm">
+                    <i class="fas fa-upload mr-1.5"></i> Execute Restore Now
+                </button>
+            </div>
+        </div>
+    `;
+}
+
 

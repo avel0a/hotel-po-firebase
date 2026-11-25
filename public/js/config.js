@@ -215,3 +215,14 @@ export function formatMoney(amount, currency = 'Birr') {
     return `${currency || 'Birr'} ${safeNum.toFixed(2)}`;
 }
 
+/**
+ * Debounces rapid UI events (e.g., live search typing on mobile) so rendering never lags.
+ */
+export function debounce(fn, delayMs = 150) {
+    let timer = null;
+    return function debounced(...args) {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn.apply(this, args), delayMs);
+    };
+}
+

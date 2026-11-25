@@ -48,10 +48,6 @@ service cloud.firestore {
       return isActiveUser() && normalizedRole() == 'Purchasing';
     }
 
-    function isStorekeeperOrAdmin() {
-      return isStorekeeper() || isAdmin();
-    }
-
     function permsPath() {
       return /databases/$(database)/documents/settings/permissions;
     }
@@ -111,14 +107,16 @@ service cloud.firestore {
         hasPerm('manage_inventory', isStorekeeper()) ||
         hasPerm('view_reports', isGM() || isPurchasing())
       );
-      allow create: if isActiveUser() &&
+      allow create: if isAdmin() || (
+        isActiveUser() &&
         hasPerm('create_request', true) &&
         request.resource.data.status == 'Pending' &&
         request.resource.data.createdBy == request.auth.uid &&
         request.resource.data.items is list &&
         request.resource.data.items.size() > 0 &&
         request.resource.data.totalCost is number &&
-        request.resource.data.totalCost >= 0;
+        request.resource.data.totalCost >= 0
+      );
       allow update: if isActiveUser() && (
         isAdmin() ||
         // GM (or permitted role): approve or reject only Pending requests without altering items/cost/creator
@@ -172,8 +170,13 @@ service cloud.firestore {
     }
 
     match /settings/{settingId} {
-      allow read: if isActiveUser();
-      allow write: if isActiveUser() && hasPerm('manage_settings', isGM());
+      allow read: if isActiveUser() && settingId != 'backup';
+      allow write: if isActiveUser() && hasPerm('manage_settings', isGM()) && settingId != 'backup';
+    }
+
+    // backups: sensitive backup metadata & Cloudinary config strictly restricted to Admins
+    match /backups/{docId} {
+      allow read, write: if isAdmin();
     }
 
     // notifications: active staff can read/create; updates strictly limited to marking 'readBy'

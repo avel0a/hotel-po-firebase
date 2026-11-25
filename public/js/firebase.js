@@ -12,7 +12,7 @@ import {
 import {
     getFirestore, doc, collection, addDoc, setDoc, updateDoc, deleteDoc,
     onSnapshot, query, where, serverTimestamp, orderBy, getDoc, getDocs,
-    arrayUnion, limit, runTransaction, writeBatch, increment
+    arrayUnion, limit, startAfter, documentId, Timestamp, runTransaction, writeBatch, increment
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
 import { firebaseConfig } from './config.js';
@@ -35,5 +35,5 @@ export {
     onAuthStateChanged, signOut, sendPasswordResetEmail,
     doc, collection, addDoc, setDoc, updateDoc, deleteDoc,
     onSnapshot, query, where, serverTimestamp, orderBy, getDoc, getDocs,
-    arrayUnion, limit, runTransaction, writeBatch, increment
+    arrayUnion, limit, startAfter, documentId, Timestamp, runTransaction, writeBatch, increment
 };

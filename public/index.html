@@ -54,7 +54,7 @@
     </script>
 
     <!-- Custom Styles -->
-    <link rel="stylesheet" href="/css/styles.css?v=3.2">
+    <link rel="stylesheet" href="/css/styles.css?v=3.3">
 </head>
 <body class="font-sans transition-colors duration-300 relative">
     <!-- SVG Blob Background -->
@@ -187,6 +187,7 @@
             <main class="flex-1 min-w-0 overflow-y-auto overflow-x-hidden p-3 pb-20 md:p-6 md:pb-6 bg-gray-50 transition-colors duration-300">
                 <!-- ====== Dashboard Section ====== -->
                 <section id="dashboard" class="section-content">
+                    <div id="admin-backup-reminder" class="hidden mb-6"></div>
                     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                         <div class="bg-white p-6 rounded-xl shadow-lg cursor-pointer hover:shadow-xl transform hover:-translate-y-1 transition-all duration-300 dashboard-stat-card" data-filter-status="Pending">
                             <div class="flex justify-between items-center">
@@ -417,6 +418,7 @@
                             <i class="fas fa-inbox text-3xl mb-2 opacity-40"></i>
                             <p class="text-sm font-medium">No purchase requests or requisitions found.</p>
                         </div>
+                        <div id="my-requests-pagination" class="mt-3"></div>
                     </div>
                 </section>
 
@@ -482,6 +484,7 @@
                             <i class="fas fa-boxes text-3xl mb-2 opacity-40"></i>
                             <p class="text-sm font-medium">Inventory is empty.</p>
                         </div>
+                        <div id="inventory-pagination" class="mt-3"></div>
                     </div>
                 </section>
 
@@ -522,6 +525,7 @@
                             <div id="report-summary" class="overflow-x-auto"></div>
                             <h3 class="text-lg font-semibold mt-10 mb-4">Detailed Requests Report</h3>
                             <div id="detailed-report-table" class="overflow-x-auto"></div>
+                            <div id="reports-pagination" class="mt-3"></div>
                              <div id="reports-empty" class="text-center p-4 text-gray-500 hidden">No reports found with current filters.</div>
                         </div>
                     </div>
@@ -746,6 +750,138 @@
                                 </form>
                             </div>
                         </div>
+
+                        <!-- Data Backup, AES-256 Encryption & Cloudinary Off-Site Storage Card (Admin Only) -->
+                        <div id="backup-recovery-card" class="bg-white dark:bg-gray-800 rounded-lg shadow p-6 transition-colors duration-200 requires-role flex-col" data-role="System Administrator">
+                            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+                                <div>
+                                    <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center">
+                                        <i class="fas fa-shield-alt mr-2 text-indigo-600"></i> Sensitive Data Backup, AES-256 Encryption &amp; Cloudinary Storage
+                                    </h3>
+                                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                        Works on Firebase <strong>Spark (Free)</strong> plan. Protects sensitive hotel records (users, prices, POs, ledgers) using browser-side <strong>AES-256-GCM</strong> encryption before leaving this device.
+                                    </p>
+                                </div>
+                                <span id="backup-health-badge" class="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-200 whitespace-nowrap self-start sm:self-center">
+                                    Checking backup status...
+                                </span>
+                            </div>
+
+                            <!-- Security Architecture Banner -->
+                            <div class="mb-5 p-3.5 rounded-lg bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 text-xs text-indigo-950 dark:text-indigo-200 flex items-start space-x-2.5">
+                                <i class="fas fa-user-lock text-indigo-600 dark:text-indigo-400 text-base mt-0.5 shrink-0"></i>
+                                <div class="space-y-1">
+                                    <div class="font-bold">Why Passphrase Encryption Matters on Free Plans (Spark + Cloudinary):</div>
+                                    <p>Because Spark has no backend server to hide a Cloudinary API Secret, Cloudinary unsigned uploads create URL-addressable <code>raw</code> files. To keep sensitive hotel data strictly private, this system <strong>encrypts the entire backup in your browser (PBKDF2 + AES-256-GCM)</strong> before uploading to Cloudinary, and never stores your passphrase or API Secret anywhere.</p>
+                                </div>
+                            </div>
+
+                            <!-- Step 1: Passphrase Input -->
+                            <div class="mb-5 p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-750/60">
+                                <label for="backup-passphrase" class="block text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-gray-200 mb-1">
+                                    <i class="fas fa-key text-amber-500 mr-1"></i> Step 1: Backup Encryption Passphrase (Keep This Safe!)
+                                </label>
+                                <div class="flex gap-2 items-center max-w-md mt-1">
+                                    <div class="relative flex-1">
+                                        <input type="password" id="backup-passphrase" placeholder="Enter strong passphrase (min 6 chars)..." autocomplete="new-password" class="w-full p-2.5 pr-9 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
+                                        <button type="button" class="toggle-pass-btn absolute right-2.5 top-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200" data-target="backup-passphrase" title="Show/Hide Passphrase"><i class="fas fa-eye"></i></button>
+                                    </div>
+                                </div>
+                                <p class="text-[11px] text-gray-500 dark:text-gray-400 mt-1">Required for Cloudinary uploads and Encrypted Local Backups. Store this passphrase in a password manager — encrypted backups cannot be recovered without it.</p>
+                            </div>
+
+                            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                                <!-- Panel A: Local Full Backup -->
+                                <div class="p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex flex-col justify-between space-y-4">
+                                    <div>
+                                        <h4 class="font-bold text-sm text-gray-800 dark:text-gray-100 flex items-center">
+                                            <i class="fas fa-laptop mr-2 text-emerald-600"></i> Option A: Local Private Backup (Zero Third-Party)
+                                        </h4>
+                                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                            Exports 100% of Firestore collections (<code>users</code>, <code>requests</code>, <code>inventory</code>, <code>stock_movements</code>, <code>budgets</code>, <code>departments</code>, <code>settings</code>) directly to your computer.
+                                        </p>
+                                    </div>
+                                    <div class="flex flex-wrap gap-2">
+                                        <button type="button" id="backup-download-encrypted-btn" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg transition-colors shadow-sm flex items-center">
+                                            <i class="fas fa-lock mr-1.5"></i> Download Encrypted (.json)
+                                        </button>
+                                        <button type="button" id="backup-download-plain-btn" class="px-3.5 py-2 border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 text-xs font-semibold rounded-lg transition-colors flex items-center" title="Unencrypted JSON — keep offline in a secure location">
+                                            <i class="fas fa-file-code mr-1.5"></i> Plain JSON
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- Panel B: Cloudinary Encrypted Storage -->
+                                <div class="p-4 rounded-lg border border-sky-200 dark:border-sky-800/60 bg-sky-50/30 dark:bg-sky-950/10 space-y-3">
+                                    <div>
+                                        <h4 class="font-bold text-sm text-gray-800 dark:text-gray-100 flex items-center">
+                                            <i class="fas fa-cloud-upload-alt mr-2 text-sky-600"></i> Option B: Cloudinary Encrypted Off-Site Backup (Free Plan)
+                                        </h4>
+                                        <p class="text-[11px] text-gray-500 dark:text-gray-400 mt-1">
+                                            In Cloudinary: <strong>Settings &rarr; Upload &rarr; Add Upload Preset</strong> &rarr; Signing Mode: <strong>Unsigned</strong>, Resource Type: <strong>Raw</strong> (or Auto).
+                                        </p>
+                                    </div>
+                                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                        <div>
+                                            <label for="backup-cloud-name" class="block text-[11px] font-semibold uppercase text-gray-600 dark:text-gray-400 mb-1">Cloud Name</label>
+                                            <input type="text" id="backup-cloud-name" placeholder="e.g. dxy123abc" class="w-full p-2 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
+                                        </div>
+                                        <div>
+                                            <label for="backup-upload-preset" class="block text-[11px] font-semibold uppercase text-gray-600 dark:text-gray-400 mb-1">Unsigned Upload Preset</label>
+                                            <input type="text" id="backup-upload-preset" placeholder="e.g. hotel_backups_unsigned" class="w-full p-2 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
+                                        </div>
+                                        <div>
+                                            <label for="backup-cloud-folder" class="block text-[11px] font-semibold uppercase text-gray-600 dark:text-gray-400 mb-1">Folder (Optional)</label>
+                                            <input type="text" id="backup-cloud-folder" value="hotel-po-backups" class="w-full p-2 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
+                                        </div>
+                                        <div>
+                                            <label for="backup-reminder-days" class="block text-[11px] font-semibold uppercase text-gray-600 dark:text-gray-400 mb-1">Remind Every (Days)</label>
+                                            <input type="number" id="backup-reminder-days" min="1" max="90" value="7" class="w-full p-2 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
+                                        </div>
+                                    </div>
+                                    <div class="flex flex-wrap gap-2 pt-1">
+                                        <button type="button" id="save-backup-config-btn" class="px-3.5 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-100 text-xs font-semibold rounded-lg transition-colors">
+                                            <i class="fas fa-save mr-1"></i> Save Config
+                                        </button>
+                                        <button type="button" id="backup-upload-cloudinary-btn" class="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white text-xs font-semibold rounded-lg transition-colors shadow-sm flex items-center">
+                                            <i class="fas fa-cloud-upload-alt mr-1.5"></i> Encrypt &amp; Upload to Cloudinary
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Step 2: Verify & Restore from Local or Cloudinary -->
+                            <div class="p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-750/40 mb-6">
+                                <h4 class="font-bold text-sm text-gray-800 dark:text-gray-100 flex items-center mb-2">
+                                    <i class="fas fa-undo-alt mr-2 text-indigo-600"></i> Step 2: Verify &amp; Restore Backup
+                                </h4>
+                                <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+                                    <div class="md:col-span-5">
+                                        <label for="restore-file-input" class="block text-[11px] font-semibold uppercase text-gray-600 dark:text-gray-400 mb-1">Local Backup File (.json)</label>
+                                        <input type="file" id="restore-file-input" accept=".json,application/json" class="w-full text-xs text-gray-700 dark:text-gray-200 file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-indigo-100 file:text-indigo-700 hover:file:bg-indigo-200 dark:file:bg-indigo-900/60 dark:file:text-indigo-200">
+                                    </div>
+                                    <div class="md:col-span-4">
+                                        <label for="restore-passphrase" class="block text-[11px] font-semibold uppercase text-gray-600 dark:text-gray-400 mb-1">Decryption Passphrase (if encrypted)</label>
+                                        <div class="relative">
+                                            <input type="password" id="restore-passphrase" placeholder="Passphrase used when exported" autocomplete="off" class="w-full p-2 pr-8 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
+                                            <button type="button" class="toggle-pass-btn absolute right-2 top-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200" data-target="restore-passphrase" title="Show/Hide Passphrase"><i class="fas fa-eye"></i></button>
+                                        </div>
+                                    </div>
+                                    <div class="md:col-span-3">
+                                        <button type="button" id="restore-preview-file-btn" class="w-full px-3.5 py-2 bg-slate-700 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg transition-colors">
+                                            <i class="fas fa-search mr-1"></i> Inspect File
+                                        </button>
+                                    </div>
+                                </div>
+                                <div id="restore-preview-container" class="hidden"></div>
+                            </div>
+
+                            <!-- Recent Backups History -->
+                            <div>
+                                <h4 class="font-bold text-xs uppercase tracking-wider text-gray-600 dark:text-gray-300 mb-2">Recent Backup History</h4>
+                                <div id="backup-history-container" class="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700"></div>
+                            </div>
+                        </div>
                     </div>
                 </section>
             </main>
@@ -767,6 +903,6 @@
     <div id="notification" class="notification fixed bottom-5 right-5 bg-green-500 text-white py-2 px-4 rounded-lg shadow-lg opacity-0 transform translate-y-10 z-[70]"></div>
 
     <!-- Application Scripts (ES Module) -->
-    <script type="module" src="/js/app.js?v=3.2"></script>
+    <script type="module" src="/js/app.js?v=3.3"></script>
 </body>
 </html>

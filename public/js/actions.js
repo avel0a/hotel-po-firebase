@@ -3,7 +3,7 @@
  * Imports UI helpers for notifications/overlays but never does rendering.
  */
 
-import state from './state.js';
+import state, { mergePaginatedCache } from './state.js';
 import {
     firebaseConfig, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS,
     DEFAULT_UNIT_MULTIPLIERS, DEFAULT_HOTEL_SETTINGS, COMMITTED_STATUSES,
@@ -14,7 +14,8 @@ import {
     signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut,
     sendPasswordResetEmail, initializeApp, deleteApp, getAuth,
     doc, collection, addDoc, setDoc, updateDoc, deleteDoc,
-    query, where, serverTimestamp, getDoc, getDocs, arrayUnion,
+    query, where, orderBy, limit, startAfter, documentId, Timestamp,
+    serverTimestamp, getDoc, getDocs, arrayUnion,
     runTransaction, writeBatch
 } from './firebase.js';
 import {
@@ -26,8 +27,19 @@ import {
     showReceiveGoodsModal, hideReceiveGoodsModal,
     showRequestDetailsModal, renderReconciliationContent, computeStockReconciliation,
     hasPermission, getActiveDepartments, renderPermissionsMatrix, updateUIVisibility,
-    findInventoryItem, getHotelSettings, applyHotelBranding
-} from './ui.js?v=3.2';
+    findInventoryItem, getHotelSettings, applyHotelBranding,
+    renderDashboard, renderDashboardCharts, updateStats, renderMyRequests,
+    renderApprovals, renderBudgets, applyReportFilters, renderStockMovements,
+    updateSidebarBadges, renderStoreOperations, renderBackupSectionUI,
+    renderRestorePreview, updateAdminBackupReminder
+} from './ui.js?v=3.3';
+import {
+    BACKUP_COLLECTIONS, BACKUP_PLAIN_FORMAT,
+    serializeFirestoreValue, deserializeFirestoreValue,
+    encryptBackupPayload, decryptBackupPayload,
+    isEncryptedBackupEnvelope, validateBackupDataset, sha256Hex,
+    uploadEncryptedBackupToCloudinary
+} from './backup.js?v=3.3';
 
 /** Internal sentinel error to abort transactions cleanly with user-facing validation feedback. */
 class ValidationError extends Error {
@@ -2338,6 +2350,15 @@ export async function handleBaselineOpeningStock(itemId = null) {
     }
     if (isReconciling) return;
 
+    // Ensure full historical movement ledger is loaded before calculating variances
+    if (state.stockMovementsHasMore) {
+        const res = await loadMoreStockMovements({ loadAll: true, silent: true });
+        if (!res.complete) {
+            showNotification("Could not load complete movement history. Load full ledger first before reconciling.", true);
+            return;
+        }
+    }
+
     const reconRows = computeStockReconciliation();
     const itemsToProcess = itemId
         ? reconRows.filter(r => r.id === itemId && !r.isMatch)
@@ -2406,4 +2427,529 @@ export async function handleBaselineOpeningStock(itemId = null) {
         isReconciling = false;
         hideLoadingOverlay();
     }
+}
+
+// ============================================================================
+// Cursor Pagination (Prevents UI Freezing & Excess Reads at Scale)
+// ============================================================================
+
+let isLoadingOlderRequests = false;
+let isLoadingOlderMovements = false;
+
+export async function loadMoreRequests() {
+    if (isLoadingOlderRequests || !state.requestsHasMore || !state.requestsLastDoc) return;
+    isLoadingOlderRequests = true;
+    showLoadingOverlay();
+    try {
+        const normRole = normalizeRole(state.userRole);
+        const canViewAllRequests = hasPermission(state.userRole, 'view_all_requests') ||
+            hasPermission(state.userRole, 'approve_requests') ||
+            hasPermission(state.userRole, 'manage_inventory') ||
+            hasPermission(state.userRole, 'view_reports');
+
+        const nextQ = canViewAllRequests
+            ? query(
+                collection(state.db, 'requests'),
+                orderBy("createdAt", "desc"),
+                startAfter(state.requestsLastDoc),
+                limit(state.requestsPageSize)
+            )
+            : query(
+                collection(state.db, 'requests'),
+                where("createdBy", "==", state.userId),
+                orderBy("createdAt", "desc"),
+                startAfter(state.requestsLastDoc),
+                limit(state.requestsPageSize)
+            );
+
+        const snap = await getDocs(nextQ);
+        const batchRows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        state.requestsOlderCache = [...state.requestsOlderCache, ...batchRows];
+        state.requestsDidPaginateOlder = true;
+        state.requestsHasMore = snap.docs.length >= state.requestsPageSize;
+        state.requestsLastDoc = snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null;
+        state.allRequestsCache = mergePaginatedCache(state.requestsLiveCache, state.requestsOlderCache);
+
+        const searchVal = document.getElementById('my-requests-search')?.value || '';
+        renderDashboard(state.allRequestsCache);
+        renderMyRequests(state.allRequestsCache.filter(r => canViewAllRequests || r.createdBy === state.userId), searchVal);
+        renderBudgets(state.budgetsCache, state.allRequestsCache);
+        if (hasPermission(state.userRole, 'approve_requests') || normRole === 'General Manager' || normRole === 'System Administrator') {
+            renderApprovals(state.allRequestsCache);
+        }
+        updateStats(state.allRequestsCache, null);
+        renderDashboardCharts(state.allRequestsCache);
+        applyReportFilters();
+        updateSidebarBadges();
+        renderStoreOperations();
+
+        showNotification(`Loaded ${batchRows.length} older request(s) (Total: ${state.allRequestsCache.length}).`);
+    } catch (err) {
+        console.error("Error loading older requests:", err);
+        showNotification("Failed to load older requests.", true);
+    } finally {
+        isLoadingOlderRequests = false;
+        hideLoadingOverlay();
+    }
+}
+
+export async function loadMoreStockMovements({ loadAll = false, silent = false } = {}) {
+    if (isLoadingOlderMovements) return { loaded: 0, complete: !state.stockMovementsHasMore };
+    if (!state.stockMovementsHasMore || !state.stockMovementsLastDoc) {
+        return { loaded: 0, complete: true };
+    }
+
+    isLoadingOlderMovements = true;
+    showLoadingOverlay();
+    let totalLoadedNow = 0;
+    let pageLoops = 0;
+    try {
+        do {
+            const nextQ = query(
+                collection(state.db, 'stock_movements'),
+                orderBy("timestamp", "desc"),
+                startAfter(state.stockMovementsLastDoc),
+                limit(state.stockMovementsPageSize)
+            );
+            const snap = await getDocs(nextQ);
+            const batchRows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            totalLoadedNow += batchRows.length;
+            state.stockMovementsOlderCache = [...state.stockMovementsOlderCache, ...batchRows];
+            state.stockMovementsDidPaginateOlder = true;
+            state.stockMovementsHasMore = snap.docs.length >= state.stockMovementsPageSize;
+            state.stockMovementsLastDoc = snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null;
+            pageLoops++;
+        } while (loadAll && state.stockMovementsHasMore && pageLoops < 50);
+
+        state.stockMovementsCache = mergePaginatedCache(state.stockMovementsLiveCache, state.stockMovementsOlderCache);
+        renderStockMovements(state.stockMovementsCache);
+        if (document.getElementById('reconciliation-table-container')) {
+            renderReconciliationContent();
+        }
+        if (!silent) {
+            showNotification(`Loaded ${totalLoadedNow} older movement record(s) (Total: ${state.stockMovementsCache.length}).`);
+        }
+        return { loaded: totalLoadedNow, complete: !state.stockMovementsHasMore };
+    } catch (err) {
+        console.error("Error loading older stock movements:", err);
+        showNotification("Failed to load older stock movements.", true);
+        return { loaded: totalLoadedNow, complete: false };
+    } finally {
+        isLoadingOlderMovements = false;
+        hideLoadingOverlay();
+    }
+}
+
+// ============================================================================
+// Database Backup, Client-Side AES-256 Encryption & Cloudinary Off-Site Sync
+// ============================================================================
+
+function triggerBrowserJsonDownload(obj, filename) {
+    const jsonString = JSON.stringify(obj, null, 2);
+    const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    return jsonString.length;
+}
+
+async function fetchEntireCollectionPaginated(colName) {
+    const colRef = collection(state.db, colName);
+    const docs = [];
+    let lastDocSnap = null;
+    while (true) {
+        const q = lastDocSnap
+            ? query(colRef, orderBy(documentId()), startAfter(lastDocSnap), limit(500))
+            : query(colRef, orderBy(documentId()), limit(500));
+        const snap = await getDocs(q);
+        snap.docs.forEach(d => {
+            docs.push({
+                id: d.id,
+                data: serializeFirestoreValue(d.data())
+            });
+        });
+        if (snap.docs.length < 500) break;
+        lastDocSnap = snap.docs[snap.docs.length - 1];
+    }
+    return docs;
+}
+
+async function collectCompleteBackupDataset() {
+    const collections = {};
+    const counts = {};
+    let totalDocs = 0;
+
+    for (const colName of BACKUP_COLLECTIONS) {
+        const docs = await fetchEntireCollectionPaginated(colName);
+        collections[colName] = docs;
+        counts[colName] = docs.length;
+        totalDocs += docs.length;
+    }
+
+    const cfg = getHotelSettings();
+    return {
+        format: BACKUP_PLAIN_FORMAT,
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        exportedBy: state.auth?.currentUser?.email || state.userId || 'Admin',
+        projectId: firebaseConfig.projectId,
+        hotelName: cfg.hotelName,
+        counts,
+        totalDocs,
+        collections
+    };
+}
+
+async function recordBackupAuditLog({ provider, encrypted, bytes, totalDocs, counts, checksumSha256 = '', secureUrl = '', publicId = '' }) {
+    const nowIso = new Date().toISOString();
+    const userEmail = state.auth?.currentUser?.email || 'Admin';
+
+    await setDoc(doc(state.db, 'backups', 'config'), {
+        lastBackupAt: serverTimestamp(),
+        lastBackupAtIso: nowIso,
+        lastBackupBy: userEmail,
+        lastBackupProvider: provider,
+        lastBackupEncrypted: Boolean(encrypted)
+    }, { merge: true });
+
+    await addDoc(collection(state.db, 'backups'), {
+        type: 'log',
+        provider,
+        encrypted: Boolean(encrypted),
+        bytes: Number(bytes || 0),
+        totalDocs: Number(totalDocs || 0),
+        counts: counts || {},
+        checksumSha256,
+        secureUrl,
+        publicId,
+        createdAt: serverTimestamp(),
+        createdAtIso: nowIso,
+        createdBy: state.userId,
+        createdByEmail: userEmail
+    });
+}
+
+export async function handleSaveBackupConfig(e) {
+    if (e) e.preventDefault();
+    if (normalizeRole(state.userRole) !== 'System Administrator') {
+        showNotification("Only System Administrators can manage backup settings.", true);
+        return;
+    }
+
+    const cloudinaryCloudName = (document.getElementById('backup-cloud-name')?.value || '').trim();
+    const cloudinaryUploadPreset = (document.getElementById('backup-upload-preset')?.value || '').trim();
+    const cloudinaryFolder = (document.getElementById('backup-cloud-folder')?.value || 'hotel-po-backups').trim() || 'hotel-po-backups';
+    const backupReminderDays = Math.max(1, Math.min(90, parseInt(document.getElementById('backup-reminder-days')?.value || '7', 10) || 7));
+
+    showLoadingOverlay();
+    try {
+        // Note: Encryption passphrase is NEVER stored in Firestore or Cloudinary.
+        await setDoc(doc(state.db, 'backups', 'config'), {
+            cloudinaryCloudName,
+            cloudinaryUploadPreset,
+            cloudinaryFolder,
+            backupReminderDays,
+            updatedAt: serverTimestamp(),
+            updatedBy: state.userId
+        }, { merge: true });
+        renderBackupSectionUI();
+        updateAdminBackupReminder();
+        showNotification("Backup & Cloudinary configuration saved cleanly (no secrets stored).");
+    } catch (err) {
+        console.error("Error saving backup config:", err);
+        showNotification("Failed to save backup configuration.", true);
+    } finally {
+        hideLoadingOverlay();
+    }
+}
+
+export async function handleDownloadBackup({ encrypted = true } = {}) {
+    if (normalizeRole(state.userRole) !== 'System Administrator') {
+        showNotification("Only System Administrators can export full database backups.", true);
+        return;
+    }
+
+    const passphraseInput = document.getElementById('backup-passphrase');
+    const passphrase = passphraseInput?.value || '';
+    if (encrypted && passphrase.length < 6) {
+        showNotification("Enter an encryption passphrase (at least 6 characters) before creating an encrypted backup.", true);
+        if (passphraseInput) passphraseInput.focus();
+        return;
+    }
+
+    showLoadingOverlay();
+    try {
+        const dataset = await collectCompleteBackupDataset();
+        const dateTag = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const safeHotel = (dataset.hotelName || 'Hotel').replace(/[^a-z0-9]+/gi, '_');
+
+        let bytes = 0;
+        let checksumSha256 = '';
+        if (encrypted) {
+            const envelope = await encryptBackupPayload(dataset, passphrase, { hotelName: dataset.hotelName });
+            checksumSha256 = envelope.checksumSha256 || '';
+            bytes = triggerBrowserJsonDownload(envelope, `${safeHotel}_Encrypted_Backup_${dateTag}.json`);
+        } else {
+            const plaintext = JSON.stringify(dataset, null, 2);
+            checksumSha256 = await sha256Hex(plaintext);
+            bytes = triggerBrowserJsonDownload(dataset, `${safeHotel}_Plain_Backup_${dateTag}.json`);
+        }
+
+        await recordBackupAuditLog({
+            provider: 'local',
+            encrypted,
+            bytes,
+            totalDocs: dataset.totalDocs,
+            counts: dataset.counts,
+            checksumSha256
+        });
+
+        showNotification(`${encrypted ? 'Encrypted' : 'Plain JSON'} backup downloaded (${dataset.totalDocs} records across ${BACKUP_COLLECTIONS.length} collections).`);
+    } catch (err) {
+        console.error("Error exporting backup:", err);
+        showNotification(err?.message || "Failed to generate backup.", true);
+    } finally {
+        hideLoadingOverlay();
+    }
+}
+
+export async function handleUploadCloudinaryBackup() {
+    if (normalizeRole(state.userRole) !== 'System Administrator') {
+        showNotification("Only System Administrators can upload backups to Cloudinary.", true);
+        return;
+    }
+
+    const cloudName = (document.getElementById('backup-cloud-name')?.value || '').trim();
+    const uploadPreset = (document.getElementById('backup-upload-preset')?.value || '').trim();
+    const folder = (document.getElementById('backup-cloud-folder')?.value || 'hotel-po-backups').trim() || 'hotel-po-backups';
+    const reminderDays = Math.max(1, Math.min(90, parseInt(document.getElementById('backup-reminder-days')?.value || '7', 10) || 7));
+    const passphraseInput = document.getElementById('backup-passphrase');
+    const passphrase = passphraseInput?.value || '';
+
+    if (!cloudName || !uploadPreset) {
+        showNotification("Enter your Cloudinary Cloud Name and Unsigned Upload Preset first.", true);
+        return;
+    }
+    if (passphrase.length < 6) {
+        showNotification("Passphrase required (min 6 chars): Cloudinary URLs require client-side AES-256 encryption to keep sensitive hotel data private.", true);
+        if (passphraseInput) passphraseInput.focus();
+        return;
+    }
+
+    showLoadingOverlay();
+    try {
+        // Persist non-secret Cloudinary settings for future backups
+        await setDoc(doc(state.db, 'backups', 'config'), {
+            cloudinaryCloudName: cloudName,
+            cloudinaryUploadPreset: uploadPreset,
+            cloudinaryFolder: folder,
+            backupReminderDays: reminderDays
+        }, { merge: true });
+
+        const dataset = await collectCompleteBackupDataset();
+        const envelope = await encryptBackupPayload(dataset, passphrase, { hotelName: dataset.hotelName });
+        const dateTag = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const safeHotel = (dataset.hotelName || 'Hotel').replace(/[^a-z0-9]+/gi, '_');
+
+        const cloudRes = await uploadEncryptedBackupToCloudinary({
+            cloudName,
+            uploadPreset,
+            folder,
+            encryptedEnvelope: envelope,
+            filename: `${safeHotel}_AES256_${dateTag}.json`
+        });
+
+        await recordBackupAuditLog({
+            provider: 'cloudinary',
+            encrypted: true,
+            bytes: cloudRes.bytes,
+            totalDocs: dataset.totalDocs,
+            counts: dataset.counts,
+            checksumSha256: envelope.checksumSha256 || '',
+            secureUrl: cloudRes.secureUrl,
+            publicId: cloudRes.publicId
+        });
+
+        showNotification(`AES-256 encrypted backup uploaded to Cloudinary (${dataset.totalDocs} records)!`);
+    } catch (err) {
+        console.error("Cloudinary backup upload failed:", err);
+        showNotification(err?.message || "Cloudinary upload failed. Verify Cloud Name and Unsigned Raw Preset.", true);
+    } finally {
+        hideLoadingOverlay();
+    }
+}
+
+async function inspectParsedBackupJson(rawText, sourceLabel) {
+    let parsed;
+    try {
+        parsed = JSON.parse(rawText);
+    } catch (_) {
+        throw new Error('Selected file is not valid JSON.');
+    }
+
+    let plainDataset = parsed;
+    let wasEncrypted = false;
+    if (isEncryptedBackupEnvelope(parsed)) {
+        wasEncrypted = true;
+        const passInput = document.getElementById('restore-passphrase');
+        const pass = passInput?.value || '';
+        if (!pass) {
+            if (passInput) passInput.focus();
+            throw new Error('This backup is AES-256 encrypted. Enter its decryption passphrase in Step 2 and click Inspect again.');
+        }
+        plainDataset = await decryptBackupPayload(parsed, pass);
+    }
+
+    const summary = validateBackupDataset(plainDataset);
+    state.pendingRestoreData = {
+        dataset: plainDataset,
+        summary,
+        wasEncrypted,
+        sourceLabel
+    };
+    renderRestorePreview();
+}
+
+export async function handleInspectLocalBackupFile() {
+    if (normalizeRole(state.userRole) !== 'System Administrator') {
+        showNotification("Only System Administrators can restore backups.", true);
+        return;
+    }
+
+    const fileInput = document.getElementById('restore-file-input');
+    const file = fileInput?.files?.[0];
+    if (!file) {
+        showNotification("Please select a backup .json file first.", true);
+        return;
+    }
+
+    showLoadingOverlay();
+    try {
+        const text = await file.text();
+        await inspectParsedBackupJson(text, file.name);
+        showNotification("Backup verified and preview loaded below.");
+    } catch (err) {
+        console.error("Backup inspect failed:", err);
+        showNotification(err?.message || "Failed to inspect backup file.", true);
+    } finally {
+        hideLoadingOverlay();
+    }
+}
+
+export async function handleLoadCloudinaryBackup(secureUrl) {
+    if (normalizeRole(state.userRole) !== 'System Administrator') {
+        showNotification("Only System Administrators can load cloud backups.", true);
+        return;
+    }
+    if (!secureUrl) return;
+
+    showLoadingOverlay();
+    try {
+        const res = await fetch(secureUrl);
+        if (!res.ok) throw new Error(`Could not fetch backup from Cloudinary (HTTP ${res.status}).`);
+        const text = await res.text();
+        await inspectParsedBackupJson(text, 'Cloudinary Encrypted Snapshot');
+        showNotification("Cloudinary backup decrypted and verified! Review below before restoring.");
+    } catch (err) {
+        console.error("Error loading Cloudinary backup:", err);
+        showNotification(err?.message || "Failed to load Cloudinary backup.", true);
+    } finally {
+        hideLoadingOverlay();
+    }
+}
+
+export function handleCancelRestore() {
+    state.pendingRestoreData = null;
+    renderRestorePreview();
+}
+
+export function handleExecuteRestore() {
+    if (normalizeRole(state.userRole) !== 'System Administrator') {
+        showNotification("Only System Administrators can execute database restores.", true);
+        return;
+    }
+    const pending = state.pendingRestoreData;
+    if (!pending || !pending.dataset?.collections) {
+        showNotification("Load and inspect a backup first.", true);
+        return;
+    }
+
+    const selectedCols = Array.from(document.querySelectorAll('.restore-collection-cb:checked')).map(cb => cb.value);
+    if (selectedCols.length === 0) {
+        showNotification("Select at least one collection to restore.", true);
+        return;
+    }
+
+    showConfirmModal(
+        `Restore ${selectedCols.join(', ')} from "${pending.sourceLabel}"? Existing records with matching IDs will be merged (immutable audit logs already present stay untouched).`,
+        async () => {
+            showLoadingOverlay();
+            try {
+                let restoredCount = 0;
+                let skippedImmutableCount = 0;
+
+                for (const colName of selectedCols) {
+                    const docs = pending.dataset.collections[colName] || [];
+                    if (docs.length === 0) continue;
+
+                    let existingMovementIds = null;
+                    if (colName === 'stock_movements') {
+                        const existingDocs = await fetchEntireCollectionPaginated('stock_movements');
+                        existingMovementIds = new Set(existingDocs.map(d => d.id));
+                    }
+
+                    const writes = [];
+                    for (const entry of docs) {
+                        if (colName === 'settings' && entry.id === 'backup') continue;
+                        if (colName === 'stock_movements') {
+                            if (existingMovementIds.has(entry.id)) {
+                                skippedImmutableCount++;
+                                continue;
+                            }
+                            const d = entry.data || {};
+                            if (!['IN', 'OUT'].includes(d.type) || typeof d.quantity !== 'number' || d.quantity < 0) {
+                                skippedImmutableCount++;
+                                continue;
+                            }
+                        }
+                        writes.push({
+                            ref: doc(state.db, colName, entry.id),
+                            data: deserializeFirestoreValue(entry.data, Timestamp)
+                        });
+                    }
+
+                    for (let i = 0; i < writes.length; i += 350) {
+                        const batch = writeBatch(state.db);
+                        writes.slice(i, i + 350).forEach(w => {
+                            if (colName === 'stock_movements') {
+                                batch.set(w.ref, w.data);
+                            } else {
+                                batch.set(w.ref, w.data, { merge: true });
+                            }
+                        });
+                        await batch.commit();
+                        restoredCount += writes.slice(i, i + 350).length;
+                    }
+                }
+
+                state.pendingRestoreData = null;
+                renderRestorePreview();
+                const passEl = document.getElementById('restore-passphrase');
+                if (passEl) passEl.value = '';
+
+                const skipNote = skippedImmutableCount > 0 ? ` (${skippedImmutableCount} existing/immutable audit entries skipped)` : '';
+                showNotification(`Restore complete: ${restoredCount} document(s) restored across ${selectedCols.length} collection(s)${skipNote}.`);
+            } catch (err) {
+                console.error("Database restore failed:", err);
+                showNotification(err?.message || "Restore failed. Check console for details.", true);
+            } finally {
+                hideLoadingOverlay();
+            }
+        }
+    );
 }

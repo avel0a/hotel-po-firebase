@@ -17,19 +17,58 @@ import {
     formatMoney,
     normalizeRole,
     isPurchaseRequest,
-    COMMITTED_STATUSES
+    COMMITTED_STATUSES,
+    debounce
 } from '../public/js/config.js';
+import {
+    BACKUP_ENVELOPE_FORMAT,
+    BACKUP_PLAIN_FORMAT,
+    serializeFirestoreValue,
+    deserializeFirestoreValue,
+    encryptBackupPayload,
+    decryptBackupPayload,
+    isEncryptedBackupEnvelope,
+    validateBackupDataset,
+    uploadEncryptedBackupToCloudinary
+} from '../public/js/backup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 
 // 1. Parse every frontend ES module using Node's native SourceTextModule parser
-const jsFiles = ['config.js', 'state.js', 'firebase.js', 'ui.js', 'actions.js', 'auth.js', 'app.js'];
+const jsFiles = ['config.js', 'state.js', 'firebase.js', 'backup.js', 'ui.js', 'actions.js', 'auth.js', 'app.js'];
 for (const file of jsFiles) {
     const code = fs.readFileSync(path.join(rootDir, 'public', 'js', file), 'utf8');
     new vm.SourceTextModule(code, { identifier: file });
 }
 console.log(`✓ All ${jsFiles.length} ES modules parsed cleanly`);
+
+// 1b. Cross-module named & default export binding verification
+const exportsMap = {};
+for (const file of jsFiles) {
+    const src = fs.readFileSync(path.join(rootDir, 'public', 'js', file), 'utf8');
+    const ex = new Set();
+    for (const m of src.matchAll(/export\s+(?:async\s+)?(?:function|const|let|var|class)\s+(\w+)/g)) ex.add(m[1]);
+    for (const m of src.matchAll(/export\s*\{([^}]+)\}/g)) {
+        m[1].split(',').map(s => s.trim().split(/\s+as\s+/).pop().trim()).filter(Boolean).forEach(n => ex.add(n));
+    }
+    if (/export\s+default\b/.test(src)) ex.add('default');
+    exportsMap[file] = ex;
+}
+for (const file of jsFiles) {
+    const src = fs.readFileSync(path.join(rootDir, 'public', 'js', file), 'utf8');
+    for (const m of src.matchAll(/import\s+(?:(\w+)\s*,\s*)?\{([^}]+)\}\s+from\s+['"]\.\/([^'"]+)['"]/g)) {
+        const targetFile = m[3].split('?')[0];
+        const targetExports = exportsMap[targetFile];
+        assert.ok(targetExports, `${file} imports missing module ${targetFile}`);
+        if (m[1]) assert.ok(targetExports.has('default'), `${file} imports missing default export from ${targetFile}`);
+        const names = m[2].split(',').map(s => s.trim().split(/\s+as\s+/)[0].trim()).filter(Boolean);
+        for (const n of names) {
+            assert.ok(targetExports.has(n), `${file} imports missing export "${n}" from ${targetFile}`);
+        }
+    }
+}
+console.log('✓ Cross-module import/export bindings verified');
 
 // 2. Security helpers: XSS & CSV injection protection
 assert.equal(
@@ -45,7 +84,7 @@ assert.equal(safeCsvCell('-5'), '-5');
 assert.equal(safeCsvCell('Sugar, White'), '"Sugar, White"');
 console.log('✓ XSS & CSV formula injection sanitization checks passed');
 
-// 3. Unit conversion & floating-point rounding accuracy
+// 3. Unit conversion, floating-point rounding & debounce helper
 assert.equal(getUnitConversionFactor('Bag', 'Kg', 25), 25);
 assert.equal(getUnitConversionFactor('Box', 'Each', 1), 10);
 assert.equal(getUnitConversionFactor('Kg', 'Kg', 25), 1);
@@ -53,7 +92,8 @@ assert.equal(roundQty(0.1 + 0.2), 0.3);
 assert.equal(roundQty(10 - 3.3333333), 6.667);
 assert.equal(formatMoney(125, 'USD'), 'USD 125.00');
 assert.equal(formatMoney(null, 'Birr'), 'Birr 0.00');
-console.log('✓ Package conversion, float precision & currency formatting passed');
+assert.equal(typeof debounce(() => {}, 150), 'function');
+console.log('✓ Package conversion, float precision, currency & debounce passed');
 
 // 4. Role normalization & workflow classification
 assert.equal(normalizeRole('Store Keeper'), 'Storekeeper');
@@ -66,8 +106,87 @@ assert.ok(COMMITTED_STATUSES.includes('Received'));
 assert.ok(COMMITTED_STATUSES.includes('Issued'));
 console.log('✓ Role normalization & workflow status checks passed');
 
-// 5. Verify cache-buster consistency (?v=3.2) across entry points
+// 5. Verify cache-buster consistency (?v=3.3) across entry points
 const indexHtml = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
-assert.ok(indexHtml.includes('/css/styles.css?v=3.2'), 'index.html missing styles.css?v=3.2');
-assert.ok(indexHtml.includes('/js/app.js?v=3.2'), 'index.html missing app.js?v=3.2');
-console.log('✓ Cache-buster consistency check passed');
+assert.ok(indexHtml.includes('/css/styles.css?v=3.3'), 'index.html missing styles.css?v=3.3');
+assert.ok(indexHtml.includes('/js/app.js?v=3.3'), 'index.html missing app.js?v=3.3');
+for (const entry of ['app.js', 'auth.js', 'actions.js']) {
+    const src = fs.readFileSync(path.join(rootDir, 'public', 'js', entry), 'utf8');
+    assert.ok(src.includes('?v=3.3'), `${entry} missing ?v=3.3 cache-buster`);
+}
+console.log('✓ Cache-buster (?v=3.3) consistency check passed');
+
+// 6. Backup serialization, Web Crypto AES-256-GCM encryption & Cloudinary safety policy
+class MockTimestamp {
+    constructor(seconds, nanoseconds) {
+        this.seconds = seconds;
+        this.nanoseconds = nanoseconds;
+    }
+    toDate() {
+        return new Date(this.seconds * 1000 + Math.floor(this.nanoseconds / 1e6));
+    }
+}
+
+const sampleDataset = {
+    format: BACKUP_PLAIN_FORMAT,
+    version: 1,
+    exportedAt: '2026-11-25T21:00:00.000Z',
+    hotelName: 'Skylight Grand Hotel',
+    collections: {
+        users: [{ id: 'u1', data: { email: 'admin@hotel.com', role: 'System Administrator' } }],
+        requests: [{
+            id: 'r1',
+            data: serializeFirestoreValue({
+                department: 'Kitchen',
+                totalCost: 2450.5,
+                createdAt: new MockTimestamp(1795600000, 123000000)
+            })
+        }]
+    }
+};
+
+const restoredReq = deserializeFirestoreValue(sampleDataset.collections.requests[0].data, MockTimestamp);
+assert.ok(restoredReq.createdAt instanceof MockTimestamp);
+assert.equal(restoredReq.createdAt.seconds, 1795600000);
+assert.equal(restoredReq.createdAt.nanoseconds, 123000000);
+
+const summary = validateBackupDataset(sampleDataset);
+assert.equal(summary.totalDocs, 2);
+assert.equal(summary.counts.requests, 1);
+
+await assert.rejects(
+    () => encryptBackupPayload(sampleDataset, 'short'),
+    /at least 6 characters/
+);
+
+const envelope = await encryptBackupPayload(sampleDataset, 'HotelStrongPass!2026', { hotelName: 'Skylight Grand Hotel' });
+assert.equal(envelope.format, BACKUP_ENVELOPE_FORMAT);
+assert.equal(envelope.alg, 'AES-256-GCM');
+assert.ok(isEncryptedBackupEnvelope(envelope));
+assert.ok(!JSON.stringify(envelope).includes('admin@hotel.com'), 'Encrypted envelope must not leak plaintext');
+
+const decrypted = await decryptBackupPayload(envelope, 'HotelStrongPass!2026');
+assert.equal(decrypted.collections.users[0].data.email, 'admin@hotel.com');
+assert.equal(decrypted.collections.requests[0].data.totalCost, 2450.5);
+
+await assert.rejects(
+    () => decryptBackupPayload(envelope, 'WrongPassword123'),
+    /Decryption failed/
+);
+
+const tampered = { ...envelope, ciphertext: 'AAAA' + envelope.ciphertext.slice(4) };
+await assert.rejects(
+    () => decryptBackupPayload(tampered, 'HotelStrongPass!2026'),
+    /Decryption failed/
+);
+
+// Architectural guardrail: refuse unencrypted upload to Cloudinary
+await assert.rejects(
+    () => uploadEncryptedBackupToCloudinary({
+        cloudName: 'demo-cloud',
+        uploadPreset: 'unsigned_preset',
+        encryptedEnvelope: sampleDataset
+    }),
+    /Security policy violation/
+);
+console.log('✓ AES-256-GCM encryption, Timestamp round-trip & Cloudinary security policy checks passed');

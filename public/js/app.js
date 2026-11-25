@@ -5,7 +5,7 @@
 
 import state from './state.js';
 import { doc, getDoc } from './firebase.js';
-import { DEPARTMENTS } from './config.js';
+import { DEPARTMENTS, debounce } from './config.js';
 import {
     loadTheme, showSection, showNotification, toggleTheme,
     addRequestItemRow, updateTotalCost, updateItemSubtotal,
@@ -13,7 +13,8 @@ import {
     hideRequestDetailsModal, showRequestDetailsModal,
     showUserModal, hideUserModal, renderUsersTable,
     renderDashboard, renderInventory, renderMyRequests,
-    applyReportFilters, showIssueModal, hideIssueModal,
+    applyReportFilters, renderStockMovements, renderReconciliationContent,
+    showIssueModal, hideIssueModal,
     showReceiveModal, hideReceiveModal,
     showIssueRequisitionModal, hideIssueRequisitionModal,
     showOrderPOModal, hideOrderPOModal,
@@ -23,7 +24,7 @@ import {
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix,
     handleItemRowNameChange, handleItemRowUnitChange, renderNotificationBell, updateSidebarBadges, toggleNotificationDropdown,
     renderStoreOperations
-} from './ui.js?v=3.2';
+} from './ui.js?v=3.3';
 import {
     handleLogin, handleForgotPassword, handleLogout, handleCreateUser,
     handleEditUser, handleSaveUserEdit, handleResetUserPassword, handleDeleteUser,
@@ -33,9 +34,13 @@ import {
     handleSetBudget, downloadReportPdf, downloadReportCsv, downloadRequestVoucherPdf, handleQuickOrderLowStock,
     handleAddDepartment, handleDeleteDepartment, handleSaveRolePermissions, handleResetRolePermissions,
     handleSaveHotelSettings, handleMarkAllNotificationsRead, handleNotificationClick,
-    handleBaselineOpeningStock
-} from './actions.js?v=3.2';
-import { initializeFirebase } from './auth.js?v=3.2';
+    handleBaselineOpeningStock,
+    loadMoreRequests, loadMoreStockMovements,
+    handleSaveBackupConfig, handleDownloadBackup, handleUploadCloudinaryBackup,
+    handleInspectLocalBackupFile, handleLoadCloudinaryBackup,
+    handleExecuteRestore, handleCancelRestore
+} from './actions.js?v=3.3';
+import { initializeFirebase } from './auth.js?v=3.3';
 
 // ============================================================================
 // DOM Content Loaded — Wire everything up
@@ -140,8 +145,23 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // --- Report Controls ---
-    document.getElementById('apply-report-filters-btn').addEventListener('click', applyReportFilters);
+    document.getElementById('apply-report-filters-btn').addEventListener('click', () => {
+        state.reportsUiPage = 1;
+        applyReportFilters();
+    });
     document.getElementById('download-pdf-btn').addEventListener('click', downloadReportPdf);
+
+    // --- Admin Backup & Cloudinary Controls ---
+    const saveBackupCfgBtn = document.getElementById('save-backup-config-btn');
+    if (saveBackupCfgBtn) saveBackupCfgBtn.addEventListener('click', handleSaveBackupConfig);
+    const dlEncBtn = document.getElementById('backup-download-encrypted-btn');
+    if (dlEncBtn) dlEncBtn.addEventListener('click', () => handleDownloadBackup({ encrypted: true }));
+    const dlPlainBtn = document.getElementById('backup-download-plain-btn');
+    if (dlPlainBtn) dlPlainBtn.addEventListener('click', () => handleDownloadBackup({ encrypted: false }));
+    const uploadCloudBtn = document.getElementById('backup-upload-cloudinary-btn');
+    if (uploadCloudBtn) uploadCloudBtn.addEventListener('click', handleUploadCloudinaryBackup);
+    const inspectBackupBtn = document.getElementById('restore-preview-file-btn');
+    if (inspectBackupBtn) inspectBackupBtn.addEventListener('click', handleInspectLocalBackupFile);
 
     // Stock log modal
     const stockLogBtn = document.getElementById('view-stock-log-btn');
@@ -225,20 +245,22 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // --- Search (live) ---
-    document.getElementById('my-requests-search').addEventListener('input', (e) => {
+    // --- Search (debounced live search to prevent mobile frame drops) ---
+    document.getElementById('my-requests-search').addEventListener('input', debounce((e) => {
+        state.myRequestsUiPage = 1;
         renderMyRequests(state.allRequestsCache, e.target.value);
-    });
+    }, 150));
 
-    document.getElementById('inventory-search').addEventListener('input', (e) => {
+    document.getElementById('inventory-search').addEventListener('input', debounce((e) => {
+        state.inventoryUiPage = 1;
         renderInventory(state.inventoryItemsCache, e.target.value);
-    });
+    }, 150));
 
     const usersSearch = document.getElementById('users-search');
     if (usersSearch) {
-        usersSearch.addEventListener('input', (e) => {
+        usersSearch.addEventListener('input', debounce((e) => {
             renderUsersTable(state.allUsersCache, e.target.value);
-        });
+        }, 150));
     }
     const showDeletedToggle = document.getElementById('show-deleted-users-toggle');
     if (showDeletedToggle) {
@@ -258,6 +280,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 state.inventorySortColumn = column;
                 state.inventorySortDirection = 'asc';
             }
+            state.inventoryUiPage = 1;
             renderInventory(state.inventoryItemsCache, document.getElementById('inventory-search').value);
         }
     });
@@ -510,11 +533,79 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // Pagination controls (client-side UI paging + cloud cursor Load Older)
+        const pageBtn = e.target.closest('.table-page-btn');
+        if (pageBtn) {
+            const table = pageBtn.dataset.table;
+            const delta = pageBtn.dataset.dir === 'next' ? 1 : -1;
+            if (table === 'my-requests') {
+                state.myRequestsUiPage = Math.max(1, (state.myRequestsUiPage || 1) + delta);
+                renderMyRequests(state.allRequestsCache, document.getElementById('my-requests-search')?.value || '');
+            } else if (table === 'inventory') {
+                state.inventoryUiPage = Math.max(1, (state.inventoryUiPage || 1) + delta);
+                renderInventory(state.inventoryItemsCache, document.getElementById('inventory-search')?.value || '');
+            } else if (table === 'reports') {
+                state.reportsUiPage = Math.max(1, (state.reportsUiPage || 1) + delta);
+                applyReportFilters();
+            } else if (table === 'movements') {
+                state.stockMovementsUiPage = Math.max(1, (state.stockMovementsUiPage || 1) + delta);
+                renderStockMovements(state.stockMovementsCache);
+            } else if (table === 'recon') {
+                state.reconUiPage = Math.max(1, (state.reconUiPage || 1) + delta);
+                renderReconciliationContent();
+            }
+            return;
+        }
+        if (e.target.closest('#load-older-requests-btn')) {
+            loadMoreRequests();
+            return;
+        }
+        if (e.target.closest('#load-older-movements-btn')) {
+            loadMoreStockMovements({ loadAll: false });
+            return;
+        }
+        if (e.target.closest('#recon-load-full-ledger-btn')) {
+            loadMoreStockMovements({ loadAll: true });
+            return;
+        }
+
+        // Dashboard Admin Backup Reminder shortcut + Backup/Restore dynamic controls
+        if (e.target.closest('#goto-backup-settings-btn')) {
+            showSection('settings');
+            setTimeout(() => document.getElementById('backup-recovery-card')?.scrollIntoView({ behavior: 'smooth' }), 50);
+            return;
+        }
+        const togglePassBtn = e.target.closest('.toggle-pass-btn');
+        if (togglePassBtn) {
+            const targetId = togglePassBtn.dataset.target;
+            const inp = targetId ? document.getElementById(targetId) : null;
+            if (inp) {
+                inp.type = inp.type === 'password' ? 'text' : 'password';
+                const icon = togglePassBtn.querySelector('i');
+                if (icon) icon.className = inp.type === 'password' ? 'fas fa-eye' : 'fas fa-eye-slash';
+            }
+            return;
+        }
+        const restoreCloudBtn = e.target.closest('.restore-cloudinary-log-btn');
+        if (restoreCloudBtn) {
+            handleLoadCloudinaryBackup(restoreCloudBtn.dataset.url);
+            return;
+        }
+        if (e.target.closest('#restore-execute-btn')) {
+            handleExecuteRestore();
+            return;
+        }
+        if (e.target.closest('#restore-cancel-btn')) {
+            handleCancelRestore();
+            return;
+        }
+
         // Flow filter buttons (All, Dept Requisitions, Purchase Orders)
         const flowBtn = e.target.closest('.flow-filter-btn');
         if (flowBtn) {
             const flow = flowBtn.dataset.flow;
             state.requestFlowFilter = flow;
+            state.myRequestsUiPage = 1;
             document.querySelectorAll('.flow-filter-btn').forEach(btn => {
                 if (btn.dataset.flow === flow) {
                     btn.className = 'flow-filter-btn px-3 py-1.5 text-xs font-semibold rounded-md transition-colors bg-white dark:bg-gray-700 text-hotel-primary dark:text-white shadow-sm';
@@ -522,7 +613,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     btn.className = 'flow-filter-btn px-3 py-1.5 text-xs font-semibold rounded-md transition-colors text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white';
                 }
             });
-            renderMyRequests(state.allRequestsCache);
+            renderMyRequests(state.allRequestsCache, document.getElementById('my-requests-search')?.value || '');
             return;
         }
 

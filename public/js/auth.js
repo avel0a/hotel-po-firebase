@@ -1,9 +1,10 @@
 /**
  * Authentication and Firestore real-time listeners module.
- * Handles auth state changes, user profile loading, and role-scoped data subscriptions.
+ * Handles auth state changes, user profile loading, role-scoped bounded data subscriptions,
+ * and admin backup status subscriptions.
  */
 
-import state from './state.js';
+import state, { mergePaginatedCache } from './state.js';
 import { normalizeRole, DEFAULT_HOTEL_SETTINGS } from './config.js';
 import {
     initializeFirebaseApp, onAuthStateChanged, signOut,
@@ -17,8 +18,9 @@ import {
     renderBudgets, renderUsersTable, populateItemNameDatalist,
     populateReportFilters, applyReportFilters, renderStockMovements,
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix,
-    renderNotificationBell, updateSidebarBadges, renderStoreOperations
-} from './ui.js?v=3.2';
+    renderNotificationBell, updateSidebarBadges, renderStoreOperations,
+    renderBackupSectionUI, updateAdminBackupReminder
+} from './ui.js?v=3.3';
 
 /**
  * Initializes Firebase and sets up auth listener.
@@ -33,6 +35,37 @@ export async function initializeFirebase() {
         showNotification("Error connecting to the service.", true);
         hideLoadingOverlay();
     }
+}
+
+function resetDataCaches() {
+    state.allRequestsCache = [];
+    state.requestsLiveCache = [];
+    state.requestsOlderCache = [];
+    state.requestsHasMore = false;
+    state.requestsLastDoc = null;
+    state.requestsDidPaginateOlder = false;
+
+    state.allUsersCache = [];
+    state.inventoryItemsCache = [];
+    state.budgetsCache = [];
+
+    state.stockMovementsCache = [];
+    state.stockMovementsLiveCache = [];
+    state.stockMovementsOlderCache = [];
+    state.stockMovementsHasMore = false;
+    state.stockMovementsLastDoc = null;
+    state.stockMovementsDidPaginateOlder = false;
+
+    state.notificationsCache = [];
+    state.backupConfig = null;
+    state.backupLogsCache = [];
+    state.pendingRestoreData = null;
+
+    state.myRequestsUiPage = 1;
+    state.inventoryUiPage = 1;
+    state.reportsUiPage = 1;
+    state.stockMovementsUiPage = 1;
+    state.reconUiPage = 1;
 }
 
 /**
@@ -58,11 +91,7 @@ function setupAuthListener() {
             state.userId = null;
             state.userRole = null;
             state.userDepartment = null;
-            state.allRequestsCache = [];
-            state.allUsersCache = [];
-            state.budgetsCache = [];
-            state.stockMovementsCache = [];
-            state.notificationsCache = [];
+            resetDataCaches();
             const loginPage = document.getElementById('login-page');
             const appContainer = document.getElementById('app-container');
             if (loginPage) loginPage.style.display = 'flex';
@@ -152,7 +181,8 @@ async function loadUserProfile(user) {
 
 /**
  * Attaches real-time Firestore listeners scoped by the signed-in user's permissions.
- * Uses a 365-day window so annual reports, budgets, and 12-month charts have complete data.
+ * Uses bounded live queries (limit 500) plus cursor-based Load Older pagination so
+ * large hotel datasets never freeze mobile browsers or exhaust Firestore Spark quotas.
  */
 function attachFirestoreListeners() {
     if (!state.userId) return;
@@ -160,38 +190,51 @@ function attachFirestoreListeners() {
     state.unsubscribers.forEach(unsub => unsub());
     state.unsubscribers = [];
 
+    state.requestsLiveCache = [];
+    state.requestsOlderCache = [];
+    state.requestsHasMore = false;
+    state.requestsLastDoc = null;
+    state.requestsDidPaginateOlder = false;
+
+    state.stockMovementsLiveCache = [];
+    state.stockMovementsOlderCache = [];
+    state.stockMovementsHasMore = false;
+    state.stockMovementsLastDoc = null;
+    state.stockMovementsDidPaginateOlder = false;
+
     const normRole = normalizeRole(state.userRole);
     const canViewAllRequests = hasPermission(state.userRole, 'view_all_requests') ||
         hasPermission(state.userRole, 'approve_requests') ||
         hasPermission(state.userRole, 'manage_inventory') ||
         hasPermission(state.userRole, 'view_reports');
 
-    // Full 365-day window for 12-month dashboard chart, annual reports, and yearly budgets
-    const date365DaysAgo = new Date();
-    date365DaysAgo.setDate(date365DaysAgo.getDate() - 365);
-
     const requestsQuery = canViewAllRequests
         ? query(
             collection(state.db, 'requests'),
-            where("createdAt", ">=", date365DaysAgo),
-            orderBy("createdAt", "desc")
+            orderBy("createdAt", "desc"),
+            limit(state.requestsPageSize)
         )
         : query(
             collection(state.db, 'requests'),
-            where("createdBy", "==", state.userId)
+            where("createdBy", "==", state.userId),
+            orderBy("createdAt", "desc"),
+            limit(state.requestsPageSize)
         );
 
     const reqUnsub = onSnapshot(requestsQuery, (snapshot) => {
-        let rows = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-        if (!canViewAllRequests) {
-            const cutoffMs = date365DaysAgo.getTime();
-            rows = rows
-                .filter(r => !r.createdAt?.toDate || r.createdAt.toDate().getTime() >= cutoffMs)
-                .sort((a, b) => (b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0) - (a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0));
+        state.requestsLiveCache = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        if (!state.requestsDidPaginateOlder) {
+            state.requestsHasMore = snapshot.docs.length >= state.requestsPageSize;
+            state.requestsLastDoc = snapshot.docs.length > 0 ? snapshot.docs[snapshot.docs.length - 1] : null;
         }
-        state.allRequestsCache = rows;
+        state.allRequestsCache = mergePaginatedCache(state.requestsLiveCache, state.requestsOlderCache);
+
+        const searchVal = document.getElementById('my-requests-search')?.value || '';
         renderDashboard(state.allRequestsCache);
-        renderMyRequests(state.allRequestsCache.filter(r => canViewAllRequests || r.createdBy === state.userId));
+        renderMyRequests(
+            state.allRequestsCache.filter(r => canViewAllRequests || r.createdBy === state.userId),
+            searchVal
+        );
         renderBudgets(state.budgetsCache, state.allRequestsCache);
         if (hasPermission(state.userRole, 'approve_requests') || normRole === 'General Manager' || normRole === 'System Administrator') {
             renderApprovals(state.allRequestsCache);
@@ -210,7 +253,8 @@ function attachFirestoreListeners() {
     // Inventory (active staff need catalog read for item lookup & requisition validation)
     const invUnsub = onSnapshot(query(collection(state.db, 'inventory'), orderBy("name")), (snapshot) => {
         state.inventoryItemsCache = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-        renderInventory(state.inventoryItemsCache);
+        const searchVal = document.getElementById('inventory-search')?.value || '';
+        renderInventory(state.inventoryItemsCache, searchVal);
         updateStats(null, state.inventoryItemsCache);
         populateItemNameDatalist();
     }, error => console.error("Error listening to inventory:", error));
@@ -228,9 +272,20 @@ function attachFirestoreListeners() {
     }
 
     // Stock Movements Audit Trail (restricted to Storekeeper, Reports, GM, Admin)
+    // Bounded to latest 500 movements live tail + cursor Load More pagination
     if (hasPermission(state.userRole, 'manage_inventory') || hasPermission(state.userRole, 'view_reports') || normRole === 'General Manager') {
-        const movementsUnsub = onSnapshot(query(collection(state.db, 'stock_movements'), orderBy("timestamp", "desc")), (snapshot) => {
-            state.stockMovementsCache = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        const movementsQuery = query(
+            collection(state.db, 'stock_movements'),
+            orderBy("timestamp", "desc"),
+            limit(state.stockMovementsPageSize)
+        );
+        const movementsUnsub = onSnapshot(movementsQuery, (snapshot) => {
+            state.stockMovementsLiveCache = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+            if (!state.stockMovementsDidPaginateOlder) {
+                state.stockMovementsHasMore = snapshot.docs.length >= state.stockMovementsPageSize;
+                state.stockMovementsLastDoc = snapshot.docs.length > 0 ? snapshot.docs[snapshot.docs.length - 1] : null;
+            }
+            state.stockMovementsCache = mergePaginatedCache(state.stockMovementsLiveCache, state.stockMovementsOlderCache);
             renderStockMovements(state.stockMovementsCache);
         }, error => console.error("Error listening to stock movements:", error));
         state.unsubscribers.push(movementsUnsub);
@@ -278,6 +333,35 @@ function attachFirestoreListeners() {
         renderBudgets(state.budgetsCache, state.allRequestsCache);
     }, error => console.error("Error listening to general settings:", error));
     state.unsubscribers.push(generalUnsub);
+
+    // Admin-only Backup Config & History Listener
+    if (normRole === 'System Administrator') {
+        const backupsUnsub = onSnapshot(collection(state.db, 'backups'), (snapshot) => {
+            let cfg = null;
+            const logs = [];
+            snapshot.docs.forEach(d => {
+                if (d.id === 'config') {
+                    cfg = { id: d.id, ...d.data() };
+                } else {
+                    logs.push({ id: d.id, ...d.data() });
+                }
+            });
+            logs.sort((a, b) => {
+                const ta = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : new Date(a.createdAtIso || 0).getTime();
+                const tb = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : new Date(b.createdAtIso || 0).getTime();
+                return tb - ta;
+            });
+            state.backupConfig = cfg;
+            state.backupLogsCache = logs.slice(0, 20);
+            renderBackupSectionUI();
+            updateAdminBackupReminder();
+        }, error => console.warn("Error listening to backups:", error));
+        state.unsubscribers.push(backupsUnsub);
+    } else {
+        state.backupConfig = null;
+        state.backupLogsCache = [];
+        updateAdminBackupReminder();
+    }
 
     // In-App Notifications (latest 40 notifications)
     const notifsQuery = query(
