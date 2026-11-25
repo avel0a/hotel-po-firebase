@@ -7,7 +7,7 @@
 export const BACKUP_ENVELOPE_FORMAT = 'hotel-po-encrypted-backup-v1';
 export const BACKUP_PLAIN_FORMAT = 'hotel-po-backup-v1';
 export const BACKUP_COLLECTIONS = [
-    'users', 'requests', 'inventory', 'stock_movements', 'budgets', 'departments', 'settings'
+    'users', 'requests', 'inventory', 'stock_movements', 'budgets', 'departments', 'vendors', 'settings'
 ];
 
 function getSubtleCrypto() {

@@ -24,6 +24,7 @@ const state = {
     budgetsCache: [],
     stockMovementsCache: [],
     departmentsCache: [],
+    vendorsCache: [],
     notificationsCache: [],
     rolePermissions: {},
     hotelSettings: null,
@@ -60,6 +61,9 @@ const state = {
     stockLogFilterItem: null,
     reconUiPage: 1,
     reconUiPageSize: 50,
+    vendorsUiPage: 1,
+    vendorsUiPageSize: 25,
+    stocktakeDraftCounts: {},
 
     // Chart.js instances (destroyed and recreated on data change)
     requestsStatusChart: null,

@@ -19,8 +19,8 @@ import {
     populateReportFilters, applyReportFilters, renderStockMovements,
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix,
     renderNotificationBell, updateSidebarBadges, renderStoreOperations,
-    renderBackupSectionUI, updateAdminBackupReminder
-} from './ui.js?v=3.4';
+    renderBackupSectionUI, updateAdminBackupReminder, renderVendorsTable
+} from './ui.js?v=3.5';
 
 /**
  * Initializes Firebase and sets up auth listener.
@@ -48,6 +48,7 @@ function resetDataCaches() {
     state.allUsersCache = [];
     state.inventoryItemsCache = [];
     state.budgetsCache = [];
+    state.vendorsCache = [];
 
     state.stockMovementsCache = [];
     state.stockMovementsLiveCache = [];
@@ -66,6 +67,8 @@ function resetDataCaches() {
     state.reportsUiPage = 1;
     state.stockMovementsUiPage = 1;
     state.reconUiPage = 1;
+    state.vendorsUiPage = 1;
+    state.stocktakeDraftCounts = {};
 }
 
 /**
@@ -265,11 +268,22 @@ function attachFirestoreListeners() {
         const budgetsUnsub = onSnapshot(query(collection(state.db, 'budgets')), (snapshot) => {
             state.budgetsCache = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
             renderBudgets(state.budgetsCache, state.allRequestsCache);
+            if (hasPermission(state.userRole, 'approve_requests') || normRole === 'General Manager' || normRole === 'System Administrator') {
+                renderApprovals(state.allRequestsCache);
+            }
         }, error => console.error("Error listening to budgets:", error));
         state.unsubscribers.push(budgetsUnsub);
     } else {
         state.budgetsCache = [];
     }
+
+    // Approved Suppliers / Vendors Directory (active staff)
+    const vendorsUnsub = onSnapshot(query(collection(state.db, 'vendors'), orderBy("name")), (snapshot) => {
+        state.vendorsCache = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        const searchVal = document.getElementById('vendors-search')?.value || '';
+        renderVendorsTable(state.vendorsCache, searchVal);
+    }, error => console.error("Error listening to vendors:", error));
+    state.unsubscribers.push(vendorsUnsub);
 
     // Stock Movements Audit Trail (restricted to Storekeeper, Reports, GM, Admin)
     // Bounded to latest 500 movements live tail + cursor Load More pagination

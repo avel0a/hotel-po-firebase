@@ -54,7 +54,7 @@
     </script>
 
     <!-- Custom Styles -->
-    <link rel="stylesheet" href="/css/styles.css?v=3.4">
+    <link rel="stylesheet" href="/css/styles.css?v=3.5">
 </head>
 <body class="font-sans transition-colors duration-300 relative">
     <!-- SVG Blob Background -->
@@ -115,7 +115,8 @@
                         <li class="mb-2"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="my-requests"><i class="fas fa-list mr-2 w-5"></i> My Requests</a></li>
                         <li class="mb-2 requires-role" data-role="General Manager, System Administrator"><a href="#" class="nav-link flex items-center justify-between p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="approvals"><span><i class="fas fa-check-circle mr-2 w-5"></i> Approvals</span><span id="sidebar-approvals-badge" class="px-2 py-0.5 text-xs bg-amber-400 text-gray-900 rounded-full font-bold hidden">0</span></a></li>
                         <li class="mb-2 requires-role" data-role="General Manager, System Administrator"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="budgeting"><i class="fas fa-coins mr-2 w-5"></i> Budgeting</a></li>
-                        <li class="mb-2 requires-role" data-role="System Administrator, Storekeeper, Store Keeper, Purchasing"><a href="#" class="nav-link flex items-center justify-between p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="inventory"><span><i class="fas fa-boxes mr-2 w-5"></i> Inventory & Store</span><span id="sidebar-store-badge" class="px-2 py-0.5 text-xs bg-emerald-400 text-gray-900 rounded-full font-bold hidden">0</span></a></li>
+                        <li class="mb-2 requires-role" data-role="System Administrator, Storekeeper, Store Keeper, Purchasing"><a href="#" class="nav-link flex items-center justify-between p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="inventory"><span><i class="fas fa-boxes mr-2 w-5"></i> Inventory &amp; Store</span><span id="sidebar-store-badge" class="px-2 py-0.5 text-xs bg-emerald-400 text-gray-900 rounded-full font-bold hidden">0</span></a></li>
+                        <li class="mb-2 requires-role" data-permission="manage_vendors"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="vendors"><i class="fas fa-handshake mr-2 w-5"></i> Vendors &amp; Suppliers</a></li>
                         <li class="mb-2 requires-role" data-role="General Manager, System Administrator, Purchasing, Storekeeper, Store Keeper"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="reports"><i class="fas fa-chart-pie mr-2 w-5"></i> Reports</a></li>
                         <li class="mb-2 requires-role" data-role="System Administrator"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="user-management"><i class="fas fa-users-cog mr-2 w-5"></i> User Management</a></li>
                         <li class="mb-2 requires-role" data-role="System Administrator"><a href="#" class="nav-link flex items-center p-2 rounded hover:bg-hotel-secondary transition-colors" data-section="settings"><i class="fas fa-sliders-h mr-2 w-5"></i> Settings & Roles</a></li>
@@ -354,11 +355,34 @@
                                 </div>
                                 <datalist id="inventory-items-list"></datalist>
                                 <div id="items-container" class="space-y-3 mt-2"></div>
-                                <div class="flex justify-between items-center mt-4">
-                                    <button type="button" id="add-item-btn" class="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"><i class="fas fa-plus mr-2"></i> Add Item</button>
-                                    <div class="text-right">
-                                        <span class="text-lg font-semibold text-gray-700 dark:text-gray-200">Total Estimated Cost:</span>
-                                        <span id="total-cost-display" class="text-xl font-bold text-hotel-primary ml-2">Birr 0.00</span>
+                                <div class="flex flex-col md:flex-row justify-between items-start md:items-end mt-4 gap-4 border-t border-gray-200 dark:border-gray-700 pt-4">
+                                    <div>
+                                        <button type="button" id="add-item-btn" class="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"><i class="fas fa-plus mr-2"></i> Add Item</button>
+                                    </div>
+                                    <div class="w-full md:w-96 bg-gray-50 dark:bg-gray-750/60 p-3.5 rounded-lg border border-gray-200 dark:border-gray-700 space-y-2 text-xs">
+                                        <div class="flex justify-between items-center text-gray-600 dark:text-gray-300">
+                                            <span>Items Subtotal:</span>
+                                            <span id="req-subtotal-display" class="font-semibold">Birr 0.00</span>
+                                        </div>
+                                        <div class="flex justify-between items-center gap-2">
+                                            <label for="req-discount" class="text-gray-600 dark:text-gray-300 whitespace-nowrap">Discount (<span class="req-currency-inline">Birr</span>):</label>
+                                            <input type="number" step="0.01" min="0" value="0" id="req-discount" class="w-28 p-1.5 text-right border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 font-semibold">
+                                        </div>
+                                        <div class="flex justify-between items-center gap-2">
+                                            <div class="flex items-center gap-1.5">
+                                                <label for="req-tax-rate" class="text-gray-600 dark:text-gray-300 whitespace-nowrap"><span id="req-tax-label-text">VAT</span> (%):</label>
+                                                <button type="button" id="req-apply-15-vat-btn" class="px-1.5 py-0.5 text-[10px] rounded bg-blue-100 hover:bg-blue-200 dark:bg-blue-900/50 text-blue-700 dark:text-blue-200 font-semibold" title="Set 15% VAT">15%</button>
+                                            </div>
+                                            <div class="flex items-center gap-2">
+                                                <input type="number" step="0.1" min="0" max="100" value="0" id="req-tax-rate" class="w-20 p-1.5 text-right border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 font-semibold">
+                                                <span id="req-tax-display" class="w-24 text-right font-semibold text-gray-700 dark:text-gray-200">Birr 0.00</span>
+                                            </div>
+                                        </div>
+                                        <div class="flex justify-between items-center pt-2 border-t border-gray-200 dark:border-gray-600">
+                                            <span class="text-sm font-bold text-gray-800 dark:text-gray-100">Grand Total:</span>
+                                            <span id="total-cost-display" class="text-lg font-extrabold text-hotel-primary">Birr 0.00</span>
+                                        </div>
+                                        <div id="req-budget-impact-hint" class="hidden pt-1 text-[11px] font-semibold"></div>
                                     </div>
                                 </div>
                             </div>
@@ -448,6 +472,9 @@
                                 <button id="view-stock-reconciliation-btn" class="px-3 py-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center justify-center text-xs font-semibold shadow-sm" title="Reconcile inventory stock with IN minus OUT movements">
                                     <i class="fas fa-balance-scale mr-1.5"></i> Reconciliation
                                 </button>
+                                <button id="open-stocktake-btn" class="px-3 py-1.5 bg-violet-600 text-white rounded-lg hover:bg-violet-700 requires-role transition-colors flex items-center justify-center text-xs font-semibold shadow-sm" data-permission="manage_inventory" title="Print physical count sheet and post stocktake count variances">
+                                    <i class="fas fa-clipboard-check mr-1.5"></i> Stocktake
+                                </button>
                                 <button id="show-receive-modal-btn" class="px-3 py-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 requires-role transition-colors flex items-center justify-center text-xs font-semibold shadow-sm" data-role="System Administrator, Storekeeper, Store Keeper, Purchasing" title="Receive incoming vendor shipment into hotel store">
                                     <i class="fas fa-arrow-circle-down mr-1.5"></i> Fill Store
                                 </button>
@@ -485,6 +512,50 @@
                             <p class="text-sm font-medium">Inventory is empty.</p>
                         </div>
                         <div id="inventory-pagination" class="mt-3"></div>
+                    </div>
+                </section>
+
+                <!-- ====== Vendors & Suppliers Section ====== -->
+                <section id="vendors" class="section-content hidden">
+                    <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4 sm:p-6 transition-colors duration-200">
+                        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-5 gap-3">
+                            <div>
+                                <h2 class="text-xl font-bold text-gray-800 dark:text-gray-100 flex items-center">
+                                    <i class="fas fa-handshake mr-2 text-hotel-accent"></i> Approved Vendors &amp; Suppliers
+                                </h2>
+                                <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Manage supplier TINs, payment terms, contacts, and procurement history.</p>
+                            </div>
+                            <button type="button" id="show-add-vendor-modal-btn" class="px-4 py-2 bg-hotel-primary text-white rounded-lg hover:bg-hotel-secondary requires-role transition-colors flex items-center text-xs font-semibold shadow-sm" data-permission="manage_vendors">
+                                <i class="fas fa-plus mr-1.5"></i> Add Vendor
+                            </button>
+                        </div>
+
+                        <div class="mb-4">
+                            <input type="text" id="vendors-search" placeholder="Search vendors by name, TIN, category, contact, or phone..." class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-hotel-accent focus:border-hotel-accent transition-colors">
+                        </div>
+
+                        <div class="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+                            <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
+                                <thead class="bg-gray-50 dark:bg-gray-750">
+                                    <tr>
+                                        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Vendor / Supplier</th>
+                                        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">TIN / Tax ID</th>
+                                        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Contact</th>
+                                        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Category</th>
+                                        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Terms</th>
+                                        <th class="px-4 py-3 text-center text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">POs</th>
+                                        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
+                                        <th class="px-4 py-3 text-right text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider requires-role" data-permission="manage_vendors">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="vendors-table" class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700"></tbody>
+                            </table>
+                        </div>
+                        <div id="vendors-empty" class="text-center py-8 text-gray-500 dark:text-gray-400 hidden">
+                            <i class="fas fa-handshake text-3xl mb-2 opacity-40"></i>
+                            <p class="text-sm font-medium">No vendors added yet. Add your regular hotel suppliers for faster PO creation.</p>
+                        </div>
+                        <div id="vendors-pagination" class="mt-3"></div>
                     </div>
                 </section>
 
@@ -661,7 +732,7 @@
                                 </h3>
                                 <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Customize the property name, currency code/symbol, address, and signature footer displayed across dashboards, reports, and printable PDF vouchers.</p>
                             </div>
-                            <form id="hotel-branding-form" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+                            <form id="hotel-branding-form" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 items-end">
                                 <div>
                                     <label for="setting-hotel-name" class="block text-xs font-semibold uppercase tracking-wider text-gray-600 dark:text-gray-400 mb-1">Hotel / Property Name *</label>
                                     <input type="text" id="setting-hotel-name" placeholder="e.g. Skylight Grand Hotel" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100" required>
@@ -673,6 +744,14 @@
                                 <div>
                                     <label for="setting-hotel-address" class="block text-xs font-semibold uppercase tracking-wider text-gray-600 dark:text-gray-400 mb-1">Address / Phone (Vouchers)</label>
                                     <input type="text" id="setting-hotel-address" placeholder="e.g. Bole Rd, Addis Ababa" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
+                                </div>
+                                <div>
+                                    <label for="setting-tax-label" class="block text-xs font-semibold uppercase tracking-wider text-gray-600 dark:text-gray-400 mb-1">Tax / VAT Label</label>
+                                    <input type="text" id="setting-tax-label" placeholder="e.g. VAT, GST, Tax" maxlength="12" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
+                                </div>
+                                <div>
+                                    <label for="setting-default-tax" class="block text-xs font-semibold uppercase tracking-wider text-gray-600 dark:text-gray-400 mb-1">Default PO Tax Rate (%)</label>
+                                    <input type="number" step="0.1" min="0" max="100" id="setting-default-tax" placeholder="0 or 15" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
                                 </div>
                                 <div class="flex flex-col sm:flex-row gap-2">
                                     <div class="flex-1">
@@ -897,12 +976,14 @@
     <div id="receive-goods-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>
     <div id="stock-log-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>
     <div id="stock-reconciliation-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>
+    <div id="stocktake-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>
+    <div id="vendor-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>
     <div id="user-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>
     <div id="confirm-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>
     <div id="request-details-modal" class="modal fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden opacity-0 invisible"></div>
     <div id="notification" class="notification fixed bottom-5 right-5 bg-green-500 text-white py-2 px-4 rounded-lg shadow-lg opacity-0 transform translate-y-10 z-[70]"></div>
 
     <!-- Application Scripts (ES Module) -->
-    <script type="module" src="/js/app.js?v=3.4"></script>
+    <script type="module" src="/js/app.js?v=3.5"></script>
 </body>
 </html>

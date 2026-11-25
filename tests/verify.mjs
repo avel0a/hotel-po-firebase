@@ -18,11 +18,15 @@ import {
     normalizeRole,
     isPurchaseRequest,
     COMMITTED_STATUSES,
-    debounce
+    debounce,
+    computeRequestTotals,
+    computeBudgetImpact,
+    computePriceChangePct
 } from '../public/js/config.js';
 import {
     BACKUP_ENVELOPE_FORMAT,
     BACKUP_PLAIN_FORMAT,
+    BACKUP_COLLECTIONS,
     serializeFirestoreValue,
     deserializeFirestoreValue,
     encryptBackupPayload,
@@ -106,20 +110,22 @@ assert.ok(COMMITTED_STATUSES.includes('Received'));
 assert.ok(COMMITTED_STATUSES.includes('Issued'));
 console.log('✓ Role normalization & workflow status checks passed');
 
-// 5. Verify cache-buster consistency (?v=3.4) across entry points and Firestore rules
+// 5. Verify cache-buster consistency (?v=3.5) across entry points and Firestore rules
 const indexHtml = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
-assert.ok(indexHtml.includes('/css/styles.css?v=3.4'), 'index.html missing styles.css?v=3.4');
-assert.ok(indexHtml.includes('/js/app.js?v=3.4'), 'index.html missing app.js?v=3.4');
+assert.ok(indexHtml.includes('/css/styles.css?v=3.5'), 'index.html missing styles.css?v=3.5');
+assert.ok(indexHtml.includes('/js/app.js?v=3.5'), 'index.html missing app.js?v=3.5');
 for (const entry of ['app.js', 'auth.js', 'actions.js']) {
     const src = fs.readFileSync(path.join(rootDir, 'public', 'js', entry), 'utf8');
-    assert.ok(src.includes('?v=3.4'), `${entry} missing ?v=3.4 cache-buster`);
+    assert.ok(src.includes('?v=3.5'), `${entry} missing ?v=3.5 cache-buster`);
 }
 const rulesSrc = fs.readFileSync(path.join(rootDir, 'firestore.rules'), 'utf8');
 assert.ok(
     rulesSrc.includes('allow read: if isAdmin() || (isActiveUser() && settingId != \'backup\');'),
     'firestore.rules must short-circuit isAdmin() on /settings so backup collection queries succeed'
 );
-console.log('✓ Cache-buster (?v=3.4) & Firestore rule safety checks passed');
+assert.ok(rulesSrc.includes('match /vendors/{vendorId}'), 'firestore.rules missing /vendors collection rules');
+assert.ok(BACKUP_COLLECTIONS.includes('vendors'), 'BACKUP_COLLECTIONS must include vendors');
+console.log('✓ Cache-buster (?v=3.5) & Firestore rule safety checks passed');
 
 // 6. Backup serialization, Web Crypto AES-256-GCM encryption & Cloudinary safety policy
 class MockTimestamp {
@@ -195,3 +201,33 @@ await assert.rejects(
     /Security policy violation/
 );
 console.log('✓ AES-256-GCM encryption, Timestamp round-trip & Cloudinary security policy checks passed');
+
+// 7. Enterprise Tax/Discount, Budget Overrun & Vendor Price Variance checks
+const totals = computeRequestTotals({
+    items: [{ price: 100, quantity: 2 }, { price: 50, quantity: 1 }],
+    taxRate: 15,
+    discountAmount: 50
+});
+assert.equal(totals.subtotal, 250);
+assert.equal(totals.discountAmount, 50);
+assert.equal(totals.taxAmount, 30);
+assert.equal(totals.totalCost, 230);
+
+// Budget overrun detection
+const budgetImpact = computeBudgetImpact({
+    req: { id: 'req_new', department: 'Kitchen', totalCost: 4000, createdAt: new Date(2026, 10, 15) },
+    budgets: [{ department: 'Kitchen', month: '2026-11', amount: 10000 }],
+    requests: [
+        { id: 'r1', department: 'Kitchen', status: 'Approved', totalCost: 7500, createdAt: { toDate: () => new Date(2026, 10, 2) } }
+    ]
+});
+assert.equal(budgetImpact.hasBudget, true);
+assert.equal(budgetImpact.wouldExceed, true);
+assert.equal(budgetImpact.exceededBy, 1500);
+assert.equal(budgetImpact.remainingAfter, -1500);
+
+// Vendor price variance calculation
+assert.equal(computePriceChangePct(100, 115), 15);
+assert.equal(computePriceChangePct(200, 180), -10);
+assert.equal(computePriceChangePct(0, 100), null);
+console.log('✓ Tax/Discount totals, Budget Overrun guard & Price Variance checks passed');

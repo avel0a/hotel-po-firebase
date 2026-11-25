@@ -7,9 +7,10 @@ import state from './state.js';
 import { doc, getDoc } from './firebase.js';
 import {
     DEPARTMENTS, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS,
-    UNITS, DEFAULT_UNIT_MULTIPLIERS, DEFAULT_HOTEL_SETTINGS, COMMITTED_STATUSES,
+    UNITS, PAYMENT_TERMS, INVENTORY_CATEGORIES, DEFAULT_UNIT_MULTIPLIERS, DEFAULT_HOTEL_SETTINGS, COMMITTED_STATUSES,
     getUnitConversionFactor, isPurchaseRequest, normalizeRole,
-    escapeHtml, safeCsvCell, formatMoney, roundQty
+    escapeHtml, safeCsvCell, formatMoney, roundQty,
+    computeRequestTotals, computeBudgetImpact, computePriceChangePct
 } from './config.js';
 
 export function getHotelSettings() {
@@ -29,10 +30,20 @@ export function applyHotelBranding() {
     const currInput = document.getElementById('setting-currency');
     const addrInput = document.getElementById('setting-hotel-address');
     const footInput = document.getElementById('setting-footer-note');
+    const taxLabelInput = document.getElementById('setting-tax-label');
+    const defaultTaxInput = document.getElementById('setting-default-tax');
     if (nameInput && !nameInput.matches(':focus')) nameInput.value = cfg.hotelName;
     if (currInput && !currInput.matches(':focus')) currInput.value = cfg.currency;
     if (addrInput && !addrInput.matches(':focus')) addrInput.value = cfg.hotelAddress || '';
     if (footInput && !footInput.matches(':focus')) footInput.value = cfg.footerNote || '';
+    if (taxLabelInput && !taxLabelInput.matches(':focus')) taxLabelInput.value = cfg.taxLabel || 'VAT';
+    if (defaultTaxInput && !defaultTaxInput.matches(':focus')) defaultTaxInput.value = Number(cfg.defaultTaxRate || 0);
+
+    const taxLabelText = document.getElementById('req-tax-label-text');
+    if (taxLabelText) taxLabelText.textContent = cfg.taxLabel || 'VAT';
+    document.querySelectorAll('.req-currency-inline').forEach(el => {
+        el.textContent = cfg.currency;
+    });
 
     const unitPriceHeader = document.getElementById('req-unit-price-header');
     if (unitPriceHeader) unitPriceHeader.textContent = `Unit Price (${cfg.currency})`;
@@ -142,9 +153,15 @@ export function hasPermission(role, permissionName) {
     const norm = normalizeRole(role);
     if (norm === 'System Administrator') return true;
     const altRole = norm === 'Storekeeper' ? 'Store Keeper' : null;
-    const permissions = (state.rolePermissions && state.rolePermissions[norm])
+    const isUnmigratedVendorMatrix =
+        permissionName === 'manage_vendors' &&
+        state.rolePermissions &&
+        Array.isArray(state.rolePermissions['System Administrator']) &&
+        !state.rolePermissions['System Administrator'].includes('manage_vendors');
+
+    const permissions = (!isUnmigratedVendorMatrix && state.rolePermissions && state.rolePermissions[norm])
         ? state.rolePermissions[norm]
-        : (altRole && state.rolePermissions && state.rolePermissions[altRole])
+        : (!isUnmigratedVendorMatrix && altRole && state.rolePermissions && state.rolePermissions[altRole])
             ? state.rolePermissions[altRole]
             : (DEFAULT_ROLE_PERMISSIONS[norm] || (altRole ? DEFAULT_ROLE_PERMISSIONS[altRole] : []) || []);
     return permissions.includes(permissionName);
@@ -209,6 +226,7 @@ export function updateUIVisibility() {
         'approvals': 'approve_requests',
         'budgeting': 'manage_budgets',
         'inventory': 'manage_inventory',
+        'vendors': 'manage_vendors',
         'reports': 'view_reports',
         'user-management': 'manage_users',
         'settings': 'manage_settings'
@@ -394,8 +412,9 @@ export function showSection(sectionId) {
         // Auto-select Request Purpose based on user role
         const reqTypePo = document.getElementById('req-type-po');
         const reqTypeReq = document.getElementById('req-type-requisition');
+        const isDefaultPo = state.userRole === 'Purchasing' || normalizeRole(state.userRole) === 'Storekeeper' || userDept === 'Store' || userDept === 'Purchasing';
         if (reqTypePo && reqTypeReq) {
-            if (state.userRole === 'Purchasing' || normalizeRole(state.userRole) === 'Storekeeper' || userDept === 'Store' || userDept === 'Purchasing') {
+            if (isDefaultPo) {
                 reqTypePo.checked = true;
                 reqTypeReq.checked = false;
             } else {
@@ -403,6 +422,11 @@ export function showSection(sectionId) {
                 reqTypePo.checked = false;
             }
         }
+        const taxInp = document.getElementById('req-tax-rate');
+        const discInp = document.getElementById('req-discount');
+        if (taxInp) taxInp.value = isDefaultPo ? Number(getHotelSettings().defaultTaxRate || 0) : 0;
+        if (discInp) discInp.value = 0;
+        updateTotalCost();
 
         // Only GM and System Admin have permission to order on behalf of another department
         if (overrideContainer) {
@@ -426,6 +450,13 @@ export function showSection(sectionId) {
     if (sectionId === 'reports') {
         state.reportsUiPage = 1;
         applyReportFilters();
+    }
+
+    if (sectionId === 'vendors') {
+        state.vendorsUiPage = 1;
+        const vSearch = document.getElementById('vendors-search');
+        if (vSearch) vSearch.value = '';
+        renderVendorsTable(state.vendorsCache);
     }
 
     // Clear search inputs, reset UI table pages, and re-render
@@ -1128,8 +1159,15 @@ export function showOrderPOModal(req) {
     d.setDate(d.getDate() + 3);
     const defaultDateStr = d.toISOString().split('T')[0];
 
+    const activeVendors = (state.vendorsCache || []).filter(v => (v.status || 'Active') !== 'Inactive');
+    const vendorOptionsHtml = activeVendors.map(v => {
+        const selected = (req.vendorId && req.vendorId === v.id) || (req.supplier && req.supplier.toLowerCase() === (v.name || '').toLowerCase()) ? 'selected' : '';
+        return `<option value="${escapeHtml(v.id)}" data-name="${escapeHtml(v.name)}" data-tin="${escapeHtml(v.tinNumber || '')}" data-terms="${escapeHtml(v.paymentTerms || 'Net 30')}" ${selected}>${escapeHtml(v.name)}${v.category ? ` (${escapeHtml(v.category)})` : ''}</option>`;
+    }).join('');
+    const termsOptionsHtml = PAYMENT_TERMS.map(t => `<option value="${escapeHtml(t)}" ${(req.paymentTerms || 'Net 30') === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('');
+
     modal.innerHTML = `
-        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg transition-colors duration-300 overflow-hidden mx-4">
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg transition-colors duration-300 overflow-hidden mx-4 max-h-[90vh] flex flex-col">
             <div class="p-5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750">
                 <div>
                     <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center">
@@ -1141,24 +1179,54 @@ export function showOrderPOModal(req) {
                     <i class="fas fa-times"></i>
                 </button>
             </div>
-            <form id="order-po-form" class="p-6 space-y-4">
+            <form id="order-po-form" class="p-6 space-y-3.5 overflow-y-auto flex-1">
                 <input type="hidden" id="order-po-id" value="${escapeHtml(req.id)}">
+                <input type="hidden" id="order-po-vendor-id" value="${escapeHtml(req.vendorId || '')}">
 
                 <div class="bg-purple-50/60 dark:bg-purple-950/20 p-3.5 rounded-lg border border-purple-200/60 dark:border-purple-900/40 text-xs">
                     <div class="flex justify-between mb-1.5">
                         <span class="font-semibold text-gray-700 dark:text-gray-300">Purchase Order: #${escapeHtml(req.id.substring(0, 8))}</span>
                         <span class="font-bold text-purple-700 dark:text-purple-300">Total: ${money(req.totalCost || 0)}</span>
                     </div>
-                    <ul class="max-h-28 overflow-y-auto">
+                    <ul class="max-h-24 overflow-y-auto">
                         ${itemsSummary}
                     </ul>
                 </div>
+
+                ${activeVendors.length > 0 ? `
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                        Select Registered Vendor (Optional Quick-Fill)
+                    </label>
+                    <select id="order-po-vendor-select" class="w-full p-2.5 text-sm border border-purple-300 dark:border-purple-700 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-purple-500 focus:border-purple-500">
+                        <option value="">-- Choose from Vendor Directory or enter below --</option>
+                        ${vendorOptionsHtml}
+                    </select>
+                </div>
+                ` : ''}
 
                 <div>
                     <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
                         Supplier / Vendor Name *
                     </label>
                     <input type="text" id="order-po-supplier" placeholder="e.g. Bole Wholesale Food Trading PLC, Ambassel..." value="${escapeHtml(req.supplier || '')}" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-purple-500 focus:border-purple-500 transition-colors" required>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                            Supplier TIN / Tax ID
+                        </label>
+                        <input type="text" id="order-po-tin" placeholder="e.g. 0012345678" value="${escapeHtml(req.supplierTin || '')}" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-purple-500 focus:border-purple-500 transition-colors">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                            Payment Terms
+                        </label>
+                        <select id="order-po-payment-terms" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-purple-500 focus:border-purple-500 transition-colors">
+                            ${termsOptionsHtml}
+                        </select>
+                    </div>
                 </div>
 
                 <div class="grid grid-cols-2 gap-3">
@@ -1178,9 +1246,9 @@ export function showOrderPOModal(req) {
 
                 <div>
                     <label class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
-                        Purchasing Notes & Terms
+                        Purchasing Notes &amp; Delivery Terms
                     </label>
-                    <textarea id="order-po-notes" rows="2" placeholder="e.g. Net 30 payment, free delivery to hotel loading dock..." class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-purple-500 focus:border-purple-500 transition-colors">${escapeHtml(req.purchasingNotes || '')}</textarea>
+                    <textarea id="order-po-notes" rows="2" placeholder="e.g. Free delivery to hotel loading dock..." class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-purple-500 focus:border-purple-500 transition-colors">${escapeHtml(req.purchasingNotes || '')}</textarea>
                 </div>
 
                 <div class="p-3 bg-purple-50 dark:bg-purple-950/30 rounded-lg border border-purple-200 dark:border-purple-800 text-xs text-purple-900 dark:text-purple-200 flex items-start space-x-2">
@@ -1197,6 +1265,21 @@ export function showOrderPOModal(req) {
             </form>
         </div>
     `;
+
+    const vSelect = document.getElementById('order-po-vendor-select');
+    if (vSelect) {
+        vSelect.addEventListener('change', () => {
+            const opt = vSelect.options[vSelect.selectedIndex];
+            const vid = vSelect.value;
+            document.getElementById('order-po-vendor-id').value = vid || '';
+            if (vid && opt) {
+                document.getElementById('order-po-supplier').value = opt.dataset.name || '';
+                document.getElementById('order-po-tin').value = opt.dataset.tin || '';
+                const termsEl = document.getElementById('order-po-payment-terms');
+                if (termsEl && opt.dataset.terms) termsEl.value = opt.dataset.terms;
+            }
+        });
+    }
 
     modal.classList.remove('hidden', 'opacity-0', 'invisible');
     document.getElementById('close-order-po-modal-btn').addEventListener('click', hideOrderPOModal);
@@ -1224,58 +1307,80 @@ export function showReceiveGoodsModal(req) {
         const receivedQty = Number(item.receivedQuantity || 0);
         const remainingQty = Math.max(0, roundQty(orderedQty - receivedQty));
         const currentPrice = Number(item.price || 0);
-        const conversionFactor = Number(item.conversionFactor) || (DEFAULT_UNIT_MULTIPLIERS[item.unit] || 1);
+        const invItem = findInventoryItem(item);
+        const conversionFactor = Number(item.conversionFactor) || (invItem ? getUnitConversionFactor(item.unit, invItem.unit, invItem.packageSize) : (DEFAULT_UNIT_MULTIPLIERS[item.unit] || 1));
         const safeUnit = escapeHtml(item.unit || 'Units');
-        const safeBaseUnit = escapeHtml(item.baseUnit || 'units');
+        const safeBaseUnit = escapeHtml(invItem?.unit || item.baseUnit || 'units');
+        const prevBasePrice = Number(invItem?.price || 0);
+        const actualBaseNow = conversionFactor > 0 ? (currentPrice / conversionFactor) : currentPrice;
+        const pctDelta = computePriceChangePct(prevBasePrice, actualBaseNow);
         const packageNote = conversionFactor !== 1
             ? `<div class="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">1 ${safeUnit} = ${conversionFactor} ${safeBaseUnit}</div>`
             : '';
         const baseCostNote = conversionFactor !== 1 && currentPrice > 0
-            ? `<div class="text-[10px] text-gray-400 text-right mt-0.5">≈ ${(currentPrice / conversionFactor).toFixed(2)} ${curr} / ${escapeHtml(item.baseUnit || 'unit')}</div>`
+            ? `<div class="text-[10px] text-gray-400 text-right mt-0.5">≈ ${(currentPrice / conversionFactor).toFixed(2)} ${curr} / ${safeBaseUnit}</div>`
             : '';
+        let varianceBadge = '';
+        if (pctDelta !== null && Math.abs(pctDelta) >= 5) {
+            const cls = pctDelta > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400';
+            varianceBadge = `<div class="text-[10px] font-bold ${cls} text-right mt-0.5">${pctDelta > 0 ? `+${pctDelta}% vs last` : `${pctDelta}% vs last`}</div>`;
+        }
 
         return `
             <tr class="border-b border-gray-150 dark:border-gray-700/60 hover:bg-gray-50/50 dark:hover:bg-gray-755">
-                <td class="py-3 px-3">
+                <td class="py-3 px-2.5">
                     <div class="font-medium text-gray-900 dark:text-gray-100">${escapeHtml(item.name)}</div>
                     <div class="text-xs text-gray-500 dark:text-gray-400">${safeUnit}</div>
                     ${packageNote}
                 </td>
-                <td class="py-3 px-3 text-center font-semibold text-gray-700 dark:text-gray-300">
+                <td class="py-3 px-2 text-center font-semibold text-gray-700 dark:text-gray-300">
                     ${orderedQty}
                     ${conversionFactor !== 1 ? `<div class="text-[10px] text-gray-400">(${roundQty(orderedQty * conversionFactor)} base)</div>` : ''}
                 </td>
-                <td class="py-3 px-3 text-center text-xs text-gray-500 dark:text-gray-400">
+                <td class="py-3 px-2 text-center text-xs text-gray-500 dark:text-gray-400">
                     ${receivedQty}
                 </td>
-                <td class="py-3 px-3 text-center font-bold text-amber-600 dark:text-amber-400">
+                <td class="py-3 px-2 text-center font-bold text-amber-600 dark:text-amber-400">
                     ${remainingQty}
                 </td>
-                <td class="py-3 px-3 text-center">
+                <td class="py-3 px-2 text-center">
                     <input type="number"
                         step="any"
-                        class="receive-goods-qty-input w-24 p-1.5 text-sm font-bold border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-center focus:ring-emerald-500 focus:border-emerald-500"
+                        class="receive-goods-qty-input w-20 p-1.5 text-sm font-bold border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-center focus:ring-emerald-500 focus:border-emerald-500"
                         data-index="${idx}"
                         data-remaining="${remainingQty}"
                         min="0"
                         max="${remainingQty}"
                         value="${remainingQty}">
                 </td>
-                <td class="py-3 px-3 text-right">
+                <td class="py-3 px-2 text-center">
+                    <input type="number"
+                        step="any"
+                        class="receive-goods-damaged-input w-20 p-1.5 text-sm font-semibold border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-rose-700 dark:text-rose-300 text-center focus:ring-rose-500 focus:border-rose-500"
+                        data-index="${idx}"
+                        min="0"
+                        max="${remainingQty}"
+                        value="0"
+                        title="Damaged, rejected, or short units">
+                </td>
+                <td class="py-3 px-2.5 text-right">
                     <input type="number"
                         step="0.01"
-                        class="receive-goods-price-input w-28 p-1.5 text-sm font-semibold border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-right focus:ring-emerald-500 focus:border-emerald-500"
+                        class="receive-goods-price-input w-24 p-1.5 text-sm font-semibold border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-right focus:ring-emerald-500 focus:border-emerald-500"
                         data-index="${idx}"
+                        data-prev-base-price="${prevBasePrice}"
+                        data-factor="${conversionFactor}"
                         min="0"
                         value="${currentPrice.toFixed(2)}">
                     ${baseCostNote}
+                    <div class="receive-price-delta-hint" data-index="${idx}">${varianceBadge}</div>
                 </td>
             </tr>
         `;
     }).join('');
 
     modal.innerHTML = `
-        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-2xl transition-colors duration-300 overflow-hidden mx-4 max-h-[90vh] flex flex-col">
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-3xl transition-colors duration-300 overflow-hidden mx-4 max-h-[90vh] flex flex-col">
             <div class="p-5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750">
                 <div>
                     <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center">
@@ -1322,12 +1427,13 @@ export function showReceiveGoodsModal(req) {
                         <table class="min-w-full text-sm">
                             <thead class="bg-gray-50 dark:bg-gray-750 text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700">
                                 <tr>
-                                    <th class="py-2 px-3 text-left">Item</th>
-                                    <th class="py-2 px-3 text-center">Ordered</th>
-                                    <th class="py-2 px-3 text-center">Received</th>
-                                    <th class="py-2 px-3 text-center">Remaining</th>
-                                    <th class="py-2 px-3 text-center">Qty Received</th>
-                                    <th class="py-2 px-3 text-right">Actual Price</th>
+                                    <th class="py-2 px-2.5 text-left">Item</th>
+                                    <th class="py-2 px-2 text-center">Ordered</th>
+                                    <th class="py-2 px-2 text-center">Received</th>
+                                    <th class="py-2 px-2 text-center">Remaining</th>
+                                    <th class="py-2 px-2 text-center">Accept Good</th>
+                                    <th class="py-2 px-2 text-center text-rose-600 dark:text-rose-400">Damaged / Short</th>
+                                    <th class="py-2 px-2.5 text-right">Actual Price</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-150 dark:divide-gray-700/60 bg-white dark:bg-gray-800">
@@ -1376,6 +1482,26 @@ export function showReceiveGoodsModal(req) {
             });
         });
     }
+
+    // Live price variance indicator while editing actual vendor prices
+    modal.querySelectorAll('.receive-goods-price-input').forEach(inp => {
+        inp.addEventListener('input', () => {
+            const idx = inp.dataset.index;
+            const prevBase = Number(inp.dataset.prevBasePrice || 0);
+            const factor = Number(inp.dataset.factor || 1);
+            const entered = Number(inp.value || 0);
+            const hint = modal.querySelector(`.receive-price-delta-hint[data-index="${idx}"]`);
+            if (!hint) return;
+            const actualBase = factor > 0 ? (entered / factor) : entered;
+            const delta = computePriceChangePct(prevBase, actualBase);
+            if (delta !== null && Math.abs(delta) >= 5) {
+                const cls = delta > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400';
+                hint.innerHTML = `<div class="text-[10px] font-bold ${cls} text-right mt-0.5">${delta > 0 ? `+${delta}% vs last` : `${delta}% vs last`}</div>`;
+            } else {
+                hint.innerHTML = '';
+            }
+        });
+    });
 
     modal.classList.remove('hidden', 'opacity-0', 'invisible');
     document.getElementById('close-receive-goods-modal-btn').addEventListener('click', hideReceiveGoodsModal);
@@ -1615,8 +1741,9 @@ export function showRequestDetailsModal(req) {
         : '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-200 border border-blue-300 dark:border-blue-700"><i class="fas fa-hand-holding-box mr-1"></i>Department Requisition (Stock Out)</span>';
 
     const itemsRows = (req.items || []).map(i => {
+        const dmgNote = Number(i.damagedQuantity || 0) > 0 ? ` (${i.damagedQuantity} dmg)` : '';
         const progressText = isPO
-            ? `Received: ${i.receivedQuantity || 0} / ${i.quantity}`
+            ? `Received: ${i.receivedQuantity || 0} / ${i.quantity}${dmgNote}`
             : `Issued: ${i.issuedQuantity || 0} / ${i.quantity}`;
         return `
             <tr class="border-b border-gray-150 dark:border-gray-700/60 text-xs">
@@ -1628,6 +1755,13 @@ export function showRequestDetailsModal(req) {
             </tr>
         `;
     }).join('');
+
+    const hasFinBreakdown = Number(req.taxRate || 0) > 0 || Number(req.discountAmount || 0) > 0;
+    const grnBtnHtml = (isPO && (req.status === 'Partially Received' || req.status === 'Received'))
+        ? `<button type="button" class="download-grn-pdf-btn px-3.5 py-2 border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-200 rounded text-sm font-semibold transition-colors shadow-sm flex items-center" data-id="${escapeHtml(req.id)}">
+               <i class="fas fa-clipboard-check mr-1.5"></i>Print / PDF GRN
+           </button>`
+        : '';
 
     let actionBtnHtml = '';
     if (!isPO && (req.status === 'Approved' || req.status === 'Partially Issued') && hasPermission(state.userRole, 'manage_inventory')) {
@@ -1677,9 +1811,10 @@ export function showRequestDetailsModal(req) {
                 ${isPO && (req.supplier || req.expectedDeliveryDate) ? `
                     <div class="bg-purple-50/70 dark:bg-purple-950/20 p-3 rounded-lg border border-purple-200/60 dark:border-purple-900/40 text-xs space-y-1">
                         <div class="font-bold text-purple-900 dark:text-purple-300">Vendor Purchase Details:</div>
-                        <div><span class="font-semibold">Supplier:</span> ${escapeHtml(req.supplier || 'N/A')}</div>
+                        <div><span class="font-semibold">Supplier:</span> ${escapeHtml(req.supplier || 'N/A')}${req.supplierTin ? ` &nbsp;|&nbsp; <span class="font-semibold">TIN:</span> ${escapeHtml(req.supplierTin)}` : ''}${req.paymentTerms ? ` &nbsp;|&nbsp; <span class="font-semibold">Terms:</span> ${escapeHtml(req.paymentTerms)}` : ''}</div>
                         <div><span class="font-semibold">Order / Quote Ref:</span> ${escapeHtml(req.orderRef || 'N/A')}</div>
                         <div><span class="font-semibold">Expected Delivery:</span> ${escapeHtml(req.expectedDeliveryDate || 'N/A')}</div>
+                        ${req.deliveryNote ? `<div><span class="font-semibold">Last Delivery Note / Inv #:</span> ${escapeHtml(req.deliveryNote)}</div>` : ''}
                         ${req.purchasingNotes ? `<div><span class="font-semibold">Purchasing Notes:</span> ${escapeHtml(req.purchasingNotes)}</div>` : ''}
                     </div>
                 ` : ''}
@@ -1710,6 +1845,14 @@ export function showRequestDetailsModal(req) {
                         </table>
                     </div>
                 </div>
+                ${hasFinBreakdown ? `
+                <div class="bg-gray-50 dark:bg-gray-750 p-3 rounded-lg border border-gray-200 dark:border-gray-700 text-xs space-y-1 max-w-xs ml-auto">
+                    <div class="flex justify-between"><span class="text-gray-500">Items Subtotal:</span><span class="font-semibold">${money(req.subtotalCost || 0)}</span></div>
+                    ${Number(req.discountAmount || 0) > 0 ? `<div class="flex justify-between text-emerald-700 dark:text-emerald-400"><span>Discount:</span><span>-${money(req.discountAmount)}</span></div>` : ''}
+                    ${Number(req.taxRate || 0) > 0 ? `<div class="flex justify-between"><span>${escapeHtml(req.taxLabel || 'VAT')} (${Number(req.taxRate)}%):</span><span>${money(req.taxAmount || 0)}</span></div>` : ''}
+                    <div class="flex justify-between font-extrabold text-sm pt-1 border-t border-gray-200 dark:border-gray-600"><span>Grand Total:</span><span>${money(req.totalCost || 0)}</span></div>
+                </div>
+                ` : ''}
             </div>
             <div class="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-750 flex flex-wrap justify-between items-center gap-2">
                 <button type="button" id="footer-close-details-btn" class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">Close</button>
@@ -1717,6 +1860,7 @@ export function showRequestDetailsModal(req) {
                     <button type="button" class="download-voucher-pdf-btn px-3.5 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 text-slate-700 dark:text-gray-200 rounded text-sm font-semibold transition-colors shadow-sm flex items-center" data-id="${escapeHtml(req.id)}">
                         <i class="fas fa-print mr-1.5 text-slate-600 dark:text-slate-300"></i>${isPO ? 'Print / PDF PO' : 'Print / PDF Slip'}
                     </button>
+                    ${grnBtnHtml}
                     ${actionBtnHtml}
                 </div>
             </div>
@@ -1953,12 +2097,43 @@ export function updateItemSubtotal(row) {
 }
 
 export function updateTotalCost() {
-    const total = Array.from(document.querySelectorAll('#items-container .item-row')).reduce((acc, row) => {
-        const price = parseFloat(row.querySelector('.item-price').value) || 0;
-        const quantity = parseFloat(row.querySelector('.item-quantity').value) || 0;
-        return acc + (price * quantity);
-    }, 0);
-    document.getElementById('total-cost-display').textContent = money(total);
+    const items = Array.from(document.querySelectorAll('#items-container .item-row')).map(row => ({
+        price: parseFloat(row.querySelector('.item-price')?.value) || 0,
+        quantity: parseFloat(row.querySelector('.item-quantity')?.value) || 0
+    }));
+    const taxRate = parseFloat(document.getElementById('req-tax-rate')?.value) || 0;
+    const discountAmount = parseFloat(document.getElementById('req-discount')?.value) || 0;
+    const totals = computeRequestTotals({ items, taxRate, discountAmount });
+
+    const subEl = document.getElementById('req-subtotal-display');
+    const taxEl = document.getElementById('req-tax-display');
+    const grandEl = document.getElementById('total-cost-display');
+    if (subEl) subEl.textContent = money(totals.subtotal);
+    if (taxEl) taxEl.textContent = money(totals.taxAmount);
+    if (grandEl) grandEl.textContent = money(totals.totalCost);
+
+    const hintEl = document.getElementById('req-budget-impact-hint');
+    if (hintEl) {
+        const dept = document.getElementById('req-department')?.value || state.userDepartment || '';
+        const impact = computeBudgetImpact({
+            req: { department: dept, totalCost: totals.totalCost },
+            budgets: state.budgetsCache,
+            requests: state.allRequestsCache
+        });
+        if (impact.hasBudget) {
+            hintEl.classList.remove('hidden');
+            if (impact.wouldExceed) {
+                hintEl.className = 'pt-1 text-[11px] font-bold text-rose-600 dark:text-rose-400';
+                hintEl.innerHTML = `<i class="fas fa-exclamation-triangle mr-1"></i> Exceeds ${escapeHtml(dept)} ${escapeHtml(impact.period)} budget by ${money(impact.exceededBy)}!`;
+            } else {
+                hintEl.className = 'pt-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400';
+                hintEl.innerHTML = `<i class="fas fa-wallet mr-1"></i> ${escapeHtml(dept)} budget remaining after request: ${money(impact.remainingAfter)}`;
+            }
+        } else {
+            hintEl.classList.add('hidden');
+            hintEl.innerHTML = '';
+        }
+    }
 }
 
 // ============================================================================
@@ -2208,7 +2383,7 @@ export function renderMyRequests(requests, searchTerm = '') {
                         contextualAction = `<span class="text-xs text-blue-700 dark:text-blue-400 italic">Awaiting Store Goods</span>`;
                     }
                 } else if (req.status === 'Received') {
-                    contextualAction = `<span class="text-xs font-semibold text-teal-600 dark:text-teal-400 inline-flex items-center"><i class="fas fa-warehouse mr-1"></i>Stocked In</span>`;
+                    contextualAction = `<button type="button" class="download-grn-pdf-btn px-2 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded text-xs transition-colors inline-flex items-center shadow-sm" data-id="${escapeHtml(req.id)}" title="Download Goods Received Note PDF"><i class="fas fa-clipboard-check mr-1"></i>GRN PDF</button>`;
                 }
             }
 
@@ -2281,6 +2456,23 @@ export function renderApprovals(requests) {
 
             const itemsList = (req.items || []).map(i => `<li>${escapeHtml(i.name)} - ${Number(i.quantity || 0)} ${escapeHtml(i.unit || '')} (@ ${money(i.price || 0)})</li>`).join('');
             const requestedByEmail = state.allUsersCache.find(u => u.id === req.createdBy)?.email || req.createdByEmail || 'N/A';
+            const budgetImpact = computeBudgetImpact({
+                req,
+                budgets: state.budgetsCache,
+                requests: state.allRequestsCache
+            });
+            const budgetBadgeHtml = !budgetImpact.hasBudget ? '' : (
+                budgetImpact.wouldExceed
+                    ? `<div class="mt-2 p-2 rounded bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-700 text-[11px] text-rose-800 dark:text-rose-200 font-semibold">
+                           <i class="fas fa-exclamation-triangle mr-1"></i> OVER BUDGET (${escapeHtml(budgetImpact.period)}): Exceeds monthly budget by <strong>${money(budgetImpact.exceededBy)}</strong> (${budgetImpact.usagePctAfter}% used).
+                       </div>`
+                    : `<div class="mt-2 p-2 rounded bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-[11px] text-emerald-800 dark:text-emerald-200">
+                           <i class="fas fa-wallet mr-1"></i> Budget (${escapeHtml(budgetImpact.period)}): <strong>${money(budgetImpact.remainingAfter)}</strong> remaining after approval (${budgetImpact.usagePctAfter}% used).
+                       </div>`
+            );
+            const taxBadge = Number(req.taxRate || 0) > 0
+                ? `<span class="ml-1.5 text-[11px] font-normal text-gray-500 dark:text-gray-400">(incl. ${Number(req.taxRate)}% ${escapeHtml(req.taxLabel || 'VAT')})</span>`
+                : '';
             return `
                 <div class="approval-card border rounded-lg overflow-hidden bg-white dark:bg-gray-800 hover:shadow-md transition-shadow duration-200">
                     <div class="bg-gray-50 dark:bg-gray-750 px-4 py-3 flex flex-wrap justify-between items-center gap-2 border-b border-gray-200 dark:border-gray-700">
@@ -2301,17 +2493,18 @@ export function renderApprovals(requests) {
                             <div>
                                 <h4 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Items Requested</h4>
                                 <ul class="list-disc pl-5 text-sm text-gray-700 dark:text-gray-300 space-y-0.5">${itemsList}</ul>
-                                <p class="font-extrabold text-sm text-gray-900 dark:text-gray-100 mt-2">Total Estimated: ${money(req.totalCost || 0)}</p>
+                                <p class="font-extrabold text-sm text-gray-900 dark:text-gray-100 mt-2">Total: ${money(req.totalCost || 0)}${taxBadge}</p>
+                                ${budgetBadgeHtml}
                             </div>
                             <div>
-                                <h4 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Notes & Justification</h4>
+                                <h4 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Notes &amp; Justification</h4>
                                 <p class="text-sm text-gray-700 dark:text-gray-300 italic">${escapeHtml(req.notes || 'No notes provided.')}</p>
                             </div>
                             <div>
                                 <h4 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">General Manager Decision</h4>
                                 <textarea data-id="${escapeHtml(req.id)}" class="approval-notes-input w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 resize-none mb-2" rows="2" placeholder="Optional approval / rejection instructions..."></textarea>
                                 <div class="flex space-x-2">
-                                    <button data-id="${escapeHtml(req.id)}" class="approve-btn flex-1 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-md text-sm font-semibold transition-colors shadow-sm"><i class="fas fa-check mr-1"></i>Approve</button>
+                                    <button data-id="${escapeHtml(req.id)}" data-over-budget="${budgetImpact.wouldExceed ? 'true' : 'false'}" class="approve-btn flex-1 px-3 py-2 ${budgetImpact.wouldExceed ? 'bg-amber-600 hover:bg-amber-700' : 'bg-green-600 hover:bg-green-700'} text-white rounded-md text-sm font-semibold transition-colors shadow-sm"><i class="fas fa-check mr-1"></i>${budgetImpact.wouldExceed ? 'Approve (Over Budget)' : 'Approve'}</button>
                                     <button data-id="${escapeHtml(req.id)}" class="reject-btn flex-1 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md text-sm font-semibold transition-colors shadow-sm"><i class="fas fa-times mr-1"></i>Reject</button>
                                 </div>
                             </div>
@@ -2402,7 +2595,10 @@ export function renderInventory(items, searchTerm = '') {
             <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/60 transition-colors">
                 <td class="px-3 md:px-4 py-2.5 font-medium text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</td>
                 <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-xs text-gray-600 dark:text-gray-300">${escapeHtml(item.category)}</td>
-                <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-xs font-semibold text-gray-800 dark:text-gray-200">${money(item.price || 0)}${item.unit ? ' / ' + escapeHtml(item.unit) : ''}</td>
+                <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-xs font-semibold text-gray-800 dark:text-gray-200">
+                    <div>${money(item.price || 0)}${item.unit ? ' / ' + escapeHtml(item.unit) : ''}</div>
+                    ${item.lastSupplier ? `<div class="text-[10px] text-gray-400 font-normal truncate max-w-[140px]" title="Last Vendor: ${escapeHtml(item.lastSupplier)} (${money(item.lastVendorPrice ?? item.price ?? 0)})">Last: ${escapeHtml(item.lastSupplier)}</div>` : ''}
+                </td>
                 <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-xs font-bold ${item.stock <= 0 ? 'text-red-600' : (item.stock < item.min ? 'text-amber-600' : 'text-emerald-600')}">${Number(item.stock || 0)} ${escapeHtml(item.unit || '')}</td>
                 <td class="px-3 md:px-4 py-2.5 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">${Number(item.min || 0)} ${escapeHtml(item.unit || '')}</td>
                 <td class="px-3 md:px-4 py-2.5 whitespace-nowrap"><span class="px-2 py-0.5 text-[11px] font-semibold rounded-full bg-${color}-100 text-${color}-800 dark:bg-${color}-900/60 dark:text-${color}-200">${status}</span></td>
@@ -3813,5 +4009,390 @@ export function renderRestorePreview() {
         </div>
     `;
 }
+
+// ============================================================================
+// Approved Vendors & Suppliers Directory UI
+// ============================================================================
+
+export function renderVendorsTable(vendors, searchTerm = '') {
+    const tbody = document.getElementById('vendors-table');
+    const emptyEl = document.getElementById('vendors-empty');
+    if (!tbody || !emptyEl) return;
+
+    const canManage = hasPermission(state.userRole, 'manage_vendors');
+    let list = [...(vendors || state.vendorsCache || [])];
+
+    if (searchTerm) {
+        const lc = searchTerm.toLowerCase();
+        list = list.filter(v =>
+            (v.name || '').toLowerCase().includes(lc) ||
+            (v.tinNumber || '').toLowerCase().includes(lc) ||
+            (v.contactPerson || '').toLowerCase().includes(lc) ||
+            (v.phone || '').toLowerCase().includes(lc) ||
+            (v.category || '').toLowerCase().includes(lc)
+        );
+    }
+
+    if (list.length === 0) {
+        tbody.innerHTML = '';
+        emptyEl.classList.remove('hidden');
+        renderTablePaginationBar('vendors-pagination', {
+            page: 1,
+            pageSize: state.vendorsUiPageSize,
+            totalItems: 0,
+            tableKey: 'vendors'
+        });
+        return;
+    }
+
+    emptyEl.classList.add('hidden');
+    const pageSize = state.vendorsUiPageSize || 25;
+    const totalPages = Math.max(1, Math.ceil(list.length / pageSize));
+    state.vendorsUiPage = Math.min(Math.max(1, state.vendorsUiPage || 1), totalPages);
+    const startIdx = (state.vendorsUiPage - 1) * pageSize;
+    const pageRows = list.slice(startIdx, startIdx + pageSize);
+
+    // Pre-compute PO counts by vendorId or supplier name
+    const poCountsByVendor = new Map();
+    (state.allRequestsCache || []).forEach(r => {
+        if (!isPurchaseRequest(r)) return;
+        if (r.vendorId) poCountsByVendor.set(r.vendorId, (poCountsByVendor.get(r.vendorId) || 0) + 1);
+        else if (r.supplier) {
+            const k = `name:${r.supplier.trim().toLowerCase()}`;
+            poCountsByVendor.set(k, (poCountsByVendor.get(k) || 0) + 1);
+        }
+    });
+
+    tbody.innerHTML = pageRows.map(v => {
+        const isActive = (v.status || 'Active') !== 'Inactive';
+        const poCount = poCountsByVendor.get(v.id) ?? poCountsByVendor.get(`name:${(v.name || '').trim().toLowerCase()}`) ?? Number(v.orderCount || 0);
+        const safeId = escapeHtml(v.id);
+        const actionsCell = canManage ? `
+            <td class="px-4 py-3 whitespace-nowrap text-right text-xs">
+                <div class="inline-flex items-center space-x-1">
+                    <button type="button" data-id="${safeId}" class="edit-vendor-btn p-1.5 text-hotel-accent hover:text-hotel-secondary hover:bg-blue-50 dark:hover:bg-gray-700 rounded transition-colors" title="Edit Vendor"><i class="fas fa-edit"></i></button>
+                    <button type="button" data-id="${safeId}" class="delete-vendor-btn p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded transition-colors" title="Delete Vendor"><i class="fas fa-trash"></i></button>
+                </div>
+            </td>` : '';
+
+        return `
+            <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors ${isActive ? '' : 'opacity-60'}">
+                <td class="px-4 py-3">
+                    <div class="font-semibold text-gray-900 dark:text-gray-100">${escapeHtml(v.name)}</div>
+                    ${v.email ? `<div class="text-[11px] text-gray-500 dark:text-gray-400">${escapeHtml(v.email)}</div>` : ''}
+                </td>
+                <td class="px-4 py-3 whitespace-nowrap text-xs font-mono text-gray-700 dark:text-gray-300">${escapeHtml(v.tinNumber || '—')}</td>
+                <td class="px-4 py-3 text-xs">
+                    <div class="text-gray-800 dark:text-gray-200 font-medium">${escapeHtml(v.contactPerson || '—')}</div>
+                    <div class="text-gray-500 dark:text-gray-400">${escapeHtml(v.phone || '')}</div>
+                </td>
+                <td class="px-4 py-3 whitespace-nowrap text-xs text-gray-700 dark:text-gray-300">${escapeHtml(v.category || 'General')}</td>
+                <td class="px-4 py-3 whitespace-nowrap text-xs font-semibold text-indigo-700 dark:text-indigo-300">${escapeHtml(v.paymentTerms || 'Net 30')}</td>
+                <td class="px-4 py-3 whitespace-nowrap text-center text-xs font-bold text-gray-800 dark:text-gray-200">${poCount}</td>
+                <td class="px-4 py-3 whitespace-nowrap text-xs">
+                    <span class="px-2 py-0.5 rounded-full font-semibold ${isActive ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200' : 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300'}">${isActive ? 'Active' : 'Inactive'}</span>
+                </td>
+                ${actionsCell}
+            </tr>
+        `;
+    }).join('');
+
+    renderTablePaginationBar('vendors-pagination', {
+        page: state.vendorsUiPage,
+        pageSize,
+        totalItems: list.length,
+        tableKey: 'vendors'
+    });
+    updateUIVisibility();
+}
+
+export function showVendorModal(vendor = null) {
+    const modal = document.getElementById('vendor-modal');
+    if (!modal) return;
+
+    const cats = ['General / Multi-Category', ...INVENTORY_CATEGORIES];
+    const selectedCat = vendor?.category || 'General / Multi-Category';
+    const selectedTerms = vendor?.paymentTerms || 'Net 30';
+    const selectedStatus = vendor?.status || 'Active';
+
+    modal.innerHTML = `
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg transition-colors duration-300 overflow-hidden mx-4 max-h-[92vh] flex flex-col">
+            <div class="p-5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750">
+                <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center">
+                    <i class="fas fa-handshake mr-2 text-hotel-accent"></i> ${vendor ? 'Edit Supplier / Vendor' : 'Register New Supplier / Vendor'}
+                </h3>
+                <button type="button" id="close-vendor-modal-btn" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" aria-label="Close modal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <form id="vendor-form" class="p-6 space-y-3.5 overflow-y-auto flex-1">
+                <input type="hidden" id="vendor-id" value="${escapeHtml(vendor?.id || '')}">
+                <div>
+                    <label for="vendor-name" class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Vendor / Company Name *</label>
+                    <input type="text" id="vendor-name" value="${escapeHtml(vendor?.name || '')}" placeholder="e.g. Bole Wholesale Food Trading PLC" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100" required>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label for="vendor-tin" class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">TIN / Tax ID</label>
+                        <input type="text" id="vendor-tin" value="${escapeHtml(vendor?.tinNumber || '')}" placeholder="e.g. 0012345678" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
+                    </div>
+                    <div>
+                        <label for="vendor-category" class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Primary Category</label>
+                        <select id="vendor-category" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
+                            ${cats.map(c => `<option value="${escapeHtml(c)}" ${c === selectedCat ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
+                        </select>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label for="vendor-contact" class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Contact Person</label>
+                        <input type="text" id="vendor-contact" value="${escapeHtml(vendor?.contactPerson || '')}" placeholder="e.g. Dawit Bekele" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
+                    </div>
+                    <div>
+                        <label for="vendor-phone" class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Phone Number</label>
+                        <input type="text" id="vendor-phone" value="${escapeHtml(vendor?.phone || '')}" placeholder="e.g. +251 91 123 4567" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                        <label for="vendor-email" class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Email</label>
+                        <input type="email" id="vendor-email" value="${escapeHtml(vendor?.email || '')}" placeholder="sales@vendor.com" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
+                    </div>
+                    <div>
+                        <label for="vendor-terms" class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Payment Terms</label>
+                        <select id="vendor-terms" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
+                            ${PAYMENT_TERMS.map(t => `<option value="${escapeHtml(t)}" ${t === selectedTerms ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div>
+                        <label for="vendor-status" class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Status</label>
+                        <select id="vendor-status" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
+                            <option value="Active" ${selectedStatus === 'Active' ? 'selected' : ''}>Active</option>
+                            <option value="Inactive" ${selectedStatus === 'Inactive' ? 'selected' : ''}>Inactive</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label for="vendor-notes" class="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">Notes / Bank Account / Delivery Schedule</label>
+                    <textarea id="vendor-notes" rows="2" placeholder="Optional delivery days, bank info, or discount agreements..." class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">${escapeHtml(vendor?.notes || '')}</textarea>
+                </div>
+                <div class="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                    <button type="button" id="cancel-vendor-modal-btn" class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">Cancel</button>
+                    <button type="submit" class="px-5 py-2 bg-hotel-primary hover:bg-hotel-secondary text-white text-sm font-semibold rounded-md shadow-sm">${vendor ? 'Save Vendor' : 'Add Vendor'}</button>
+                </div>
+            </form>
+        </div>
+    `;
+
+    modal.classList.remove('hidden', 'opacity-0', 'invisible');
+    document.getElementById('close-vendor-modal-btn').addEventListener('click', hideVendorModal);
+    document.getElementById('cancel-vendor-modal-btn').addEventListener('click', hideVendorModal);
+}
+
+export function hideVendorModal() {
+    const modal = document.getElementById('vendor-modal');
+    if (!modal) return;
+    modal.classList.add('opacity-0', 'invisible');
+    setTimeout(() => modal.classList.add('hidden'), 300);
+}
+
+// ============================================================================
+// Physical Stocktake / Batch Inventory Count Mode UI
+// ============================================================================
+
+export function showStocktakeModal() {
+    const modal = document.getElementById('stocktake-modal');
+    if (!modal) return;
+
+    state.stocktakeDraftCounts = {};
+    const cats = [...new Set((state.inventoryItemsCache || []).map(i => i.category || 'Other'))].sort();
+
+    modal.innerHTML = `
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-5xl transition-colors duration-300 overflow-hidden mx-4 max-h-[92vh] flex flex-col">
+            <div class="p-5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 rounded-lg bg-violet-100 dark:bg-violet-900/50 flex items-center justify-center text-violet-600 dark:text-violet-300">
+                        <i class="fas fa-clipboard-check text-lg"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">Physical Stocktake &amp; Count Sheet</h3>
+                        <p class="text-xs text-gray-500 dark:text-gray-400">Print physical count sheets and post verified shelf counts directly into stock &amp; audit ledger.</p>
+                    </div>
+                </div>
+                <button type="button" id="close-stocktake-modal-btn" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1" aria-label="Close modal">
+                    <i class="fas fa-times text-lg"></i>
+                </button>
+            </div>
+
+            <div class="p-5 overflow-y-auto flex-1 space-y-4">
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-gray-50 dark:bg-gray-750/60 p-3 rounded-lg border border-gray-200 dark:border-gray-700">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <select id="stocktake-category-filter" class="p-2 text-xs border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 font-semibold">
+                            <option value="">All Categories</option>
+                            ${cats.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}
+                        </select>
+                        <input type="text" id="stocktake-search-input" placeholder="Search item..." class="p-2 text-xs border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 w-48">
+                        <label class="inline-flex items-center text-xs text-gray-700 dark:text-gray-300 cursor-pointer ml-1" title="Hide System Stock quantities when printing PDF so counters verify blindly">
+                            <input type="checkbox" id="stocktake-blind-pdf" class="mr-1.5 rounded text-violet-600">
+                            Blind Count Sheet PDF
+                        </label>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <button type="button" id="stocktake-print-pdf-btn" class="px-3.5 py-2 border border-violet-300 dark:border-violet-700 bg-violet-50 dark:bg-violet-950/40 hover:bg-violet-100 text-violet-700 dark:text-violet-200 rounded-lg text-xs font-semibold flex items-center">
+                            <i class="fas fa-print mr-1.5"></i> Print Count Sheet PDF
+                        </button>
+                        <button type="button" id="stocktake-post-btn" class="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg text-xs font-semibold shadow-sm flex items-center">
+                            <i class="fas fa-check-double mr-1.5"></i> Post Adjustments (<span id="stocktake-changes-count">0</span>)
+                        </button>
+                    </div>
+                </div>
+
+                <div id="stocktake-summary-bar" class="text-xs text-gray-600 dark:text-gray-300 px-1"></div>
+                <div id="stocktake-table-container" class="border border-gray-200 dark:border-gray-700 rounded-lg overflow-x-auto"></div>
+            </div>
+
+            <div class="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-750 flex justify-between items-center text-xs text-gray-500 dark:text-gray-400">
+                <span>Blank count fields are left unchanged when posting.</span>
+                <button type="button" id="close-stocktake-modal-bottom" class="px-5 py-2 bg-slate-700 hover:bg-slate-800 text-white text-xs font-semibold rounded-md shadow">Close</button>
+            </div>
+        </div>
+    `;
+
+    renderStocktakeRows();
+    modal.classList.remove('hidden', 'opacity-0', 'invisible');
+
+    document.getElementById('close-stocktake-modal-btn').addEventListener('click', hideStocktakeModal);
+    document.getElementById('close-stocktake-modal-bottom').addEventListener('click', hideStocktakeModal);
+    document.getElementById('stocktake-category-filter').addEventListener('change', renderStocktakeRows);
+    document.getElementById('stocktake-search-input').addEventListener('input', renderStocktakeRows);
+}
+
+export function hideStocktakeModal() {
+    const modal = document.getElementById('stocktake-modal');
+    if (!modal) return;
+    modal.classList.add('opacity-0', 'invisible');
+    setTimeout(() => modal.classList.add('hidden'), 300);
+}
+
+function updateStocktakeSummaryCounter() {
+    const invMap = new Map((state.inventoryItemsCache || []).map(i => [i.id, i]));
+    let entered = 0;
+    let changed = 0;
+    let netValDiff = 0;
+
+    for (const [id, rawVal] of Object.entries(state.stocktakeDraftCounts || {})) {
+        if (rawVal === '' || rawVal === null || rawVal === undefined) continue;
+        const item = invMap.get(id);
+        if (!item) continue;
+        const num = Number(rawVal);
+        if (!Number.isFinite(num) || num < 0) continue;
+        entered++;
+        const diff = roundQty(num - Number(item.stock || 0));
+        if (Math.abs(diff) >= 0.001) {
+            changed++;
+            netValDiff += diff * Number(item.price || 0);
+        }
+    }
+
+    const cntBadge = document.getElementById('stocktake-changes-count');
+    if (cntBadge) cntBadge.textContent = changed;
+    const bar = document.getElementById('stocktake-summary-bar');
+    if (bar) {
+        const diffColor = netValDiff < -0.01 ? 'text-rose-600 dark:text-rose-400' : (netValDiff > 0.01 ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-600 dark:text-gray-400');
+        bar.innerHTML = `Counted: <strong>${entered}</strong> item(s) • Variances to Post: <strong>${changed}</strong> • Net Valuation Impact: <strong class="${diffColor}">${netValDiff >= 0 ? '+' : ''}${money(netValDiff)}</strong>`;
+    }
+}
+
+export function renderStocktakeRows() {
+    const container = document.getElementById('stocktake-table-container');
+    if (!container) return;
+
+    const catFilter = document.getElementById('stocktake-category-filter')?.value || '';
+    const search = (document.getElementById('stocktake-search-input')?.value || '').trim().toLowerCase();
+
+    let items = [...(state.inventoryItemsCache || [])];
+    if (catFilter) items = items.filter(i => (i.category || 'Other') === catFilter);
+    if (search) items = items.filter(i => (i.name || '').toLowerCase().includes(search) || (i.category || '').toLowerCase().includes(search));
+
+    if (items.length === 0) {
+        container.innerHTML = `<div class="text-center py-8 text-xs text-gray-400">No inventory items match the selected category or search filter.</div>`;
+        updateStocktakeSummaryCounter();
+        return;
+    }
+
+    container.innerHTML = `
+        <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-xs">
+            <thead class="bg-gray-50 dark:bg-gray-750 text-gray-500 dark:text-gray-400 uppercase">
+                <tr>
+                    <th class="px-3 py-2.5 text-left">Item</th>
+                    <th class="px-3 py-2.5 text-left">Category</th>
+                    <th class="px-3 py-2.5 text-center">System Stock</th>
+                    <th class="px-3 py-2.5 text-center">Counted Stock</th>
+                    <th class="px-3 py-2.5 text-center">Variance</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-150 dark:divide-gray-700 bg-white dark:bg-gray-800">
+                ${items.map(item => {
+                    const sys = roundQty(item.stock || 0);
+                    const draft = state.stocktakeDraftCounts[item.id];
+                    const hasDraft = draft !== undefined && draft !== '';
+                    const counted = hasDraft ? roundQty(Number(draft)) : null;
+                    const diff = (hasDraft && Number.isFinite(counted)) ? roundQty(counted - sys) : 0;
+                    const diffHtml = !hasDraft
+                        ? '<span class="text-gray-400">—</span>'
+                        : (Math.abs(diff) < 0.001
+                            ? '<span class="text-emerald-600 dark:text-emerald-400 font-semibold">0 (Match)</span>'
+                            : `<span class="font-bold ${diff > 0 ? 'text-emerald-600' : 'text-rose-600'}">${diff > 0 ? `+${diff}` : diff} ${escapeHtml(item.unit || '')}</span>`);
+                    return `
+                        <tr class="hover:bg-gray-50 dark:hover:bg-gray-750">
+                            <td class="px-3 py-2 font-semibold text-gray-900 dark:text-gray-100">${escapeHtml(item.name)}</td>
+                            <td class="px-3 py-2 text-gray-600 dark:text-gray-300">${escapeHtml(item.category || 'General')}</td>
+                            <td class="px-3 py-2 text-center font-bold text-gray-700 dark:text-gray-200">${sys} ${escapeHtml(item.unit || '')}</td>
+                            <td class="px-3 py-2 text-center">
+                                <input type="number" step="any" min="0"
+                                    class="stocktake-count-input w-28 p-1.5 text-center font-bold border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                    data-id="${escapeHtml(item.id)}"
+                                    data-system="${sys}"
+                                    data-unit="${escapeHtml(item.unit || '')}"
+                                    placeholder="${sys}"
+                                    value="${hasDraft ? escapeHtml(draft) : ''}">
+                            </td>
+                            <td class="px-3 py-2 text-center stocktake-variance-cell" data-id="${escapeHtml(item.id)}">${diffHtml}</td>
+                        </tr>
+                    `;
+                }).join('')}
+            </tbody>
+        </table>
+    `;
+
+    container.querySelectorAll('.stocktake-count-input').forEach(inp => {
+        inp.addEventListener('input', () => {
+            const id = inp.dataset.id;
+            const raw = inp.value;
+            if (raw === '') {
+                delete state.stocktakeDraftCounts[id];
+            } else {
+                state.stocktakeDraftCounts[id] = raw;
+            }
+            const cell = container.querySelector(`.stocktake-variance-cell[data-id="${id}"]`);
+            if (cell) {
+                if (raw === '') {
+                    cell.innerHTML = '<span class="text-gray-400">—</span>';
+                } else {
+                    const sys = Number(inp.dataset.system || 0);
+                    const diff = roundQty((parseFloat(raw) || 0) - sys);
+                    const unit = inp.dataset.unit || '';
+                    cell.innerHTML = Math.abs(diff) < 0.001
+                        ? '<span class="text-emerald-600 dark:text-emerald-400 font-semibold">0 (Match)</span>'
+                        : `<span class="font-bold ${diff > 0 ? 'text-emerald-600' : 'text-rose-600'}">${diff > 0 ? `+${diff}` : diff} ${escapeHtml(unit)}</span>`;
+                }
+            }
+            updateStocktakeSummaryCounter();
+        });
+    });
+
+    updateStocktakeSummaryCounter();
+}
+
 
 

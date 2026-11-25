@@ -8,7 +8,8 @@ import {
     firebaseConfig, ROLES, AVAILABLE_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS,
     DEFAULT_UNIT_MULTIPLIERS, DEFAULT_HOTEL_SETTINGS, COMMITTED_STATUSES,
     getUnitConversionFactor, isPurchaseRequest, normalizeRole,
-    safeCsvCell, formatMoney, roundQty
+    safeCsvCell, formatMoney, roundQty,
+    computeRequestTotals, computeBudgetImpact, computePriceChangePct
 } from './config.js';
 import {
     signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut,
@@ -16,7 +17,7 @@ import {
     doc, collection, addDoc, setDoc, updateDoc, deleteDoc,
     query, where, orderBy, limit, startAfter, documentId, Timestamp,
     serverTimestamp, getDoc, getDocs, arrayUnion,
-    runTransaction, writeBatch
+    runTransaction, writeBatch, increment
 } from './firebase.js';
 import {
     showLoadingOverlay, hideLoadingOverlay, showNotification,
@@ -31,15 +32,17 @@ import {
     renderDashboard, renderDashboardCharts, updateStats, renderMyRequests,
     renderApprovals, renderBudgets, applyReportFilters, renderStockMovements,
     updateSidebarBadges, renderStoreOperations, renderBackupSectionUI,
-    renderRestorePreview, updateAdminBackupReminder
-} from './ui.js?v=3.4';
+    renderRestorePreview, updateAdminBackupReminder,
+    renderVendorsTable, showVendorModal, hideVendorModal,
+    showStocktakeModal, hideStocktakeModal
+} from './ui.js?v=3.5';
 import {
     BACKUP_COLLECTIONS, BACKUP_PLAIN_FORMAT,
     serializeFirestoreValue, deserializeFirestoreValue,
     encryptBackupPayload, decryptBackupPayload,
     isEncryptedBackupEnvelope, validateBackupDataset, sha256Hex,
     uploadEncryptedBackupToCloudinary
-} from './backup.js?v=3.4';
+} from './backup.js?v=3.5';
 
 /** Internal sentinel error to abort transactions cleanly with user-facing validation feedback. */
 class ValidationError extends Error {
@@ -413,7 +416,10 @@ export async function handleRequestFormSubmit(e) {
     const priority = document.getElementById('req-priority').value;
     const requiredBy = document.getElementById('req-date').value;
     const notes = document.getElementById('req-notes').value.trim();
-    const totalCost = roundQty(items.reduce((acc, item) => acc + (item.price * item.quantity), 0), 2);
+    const taxRate = parseFloat(document.getElementById('req-tax-rate')?.value) || 0;
+    const discountAmount = parseFloat(document.getElementById('req-discount')?.value) || 0;
+    const totals = computeRequestTotals({ items, taxRate, discountAmount });
+    const cfg = getHotelSettings();
 
     const reqTypeInput = document.querySelector('input[name="req-type"]:checked');
     const requestType = reqTypeInput ? reqTypeInput.value : (department === 'Store' || department === 'Purchasing' ? 'Purchase Order' : 'Requisition');
@@ -450,14 +456,20 @@ export async function handleRequestFormSubmit(e) {
 
     const newRequest = {
         requestType,
-        department, priority, requiredBy, notes, items, totalCost,
+        department, priority, requiredBy, notes, items,
+        subtotalCost: totals.subtotal,
+        discountAmount: totals.discountAmount,
+        taxRate: totals.taxRate,
+        taxLabel: cfg.taxLabel || 'VAT',
+        taxAmount: totals.taxAmount,
+        totalCost: totals.totalCost,
         status: 'Pending',
         createdAt: serverTimestamp(),
         createdBy: state.userId,
         createdByEmail: state.auth.currentUser.email
     };
 
-    const curr = getHotelSettings().currency;
+    const curr = cfg.currency;
     showLoadingOverlay();
     try {
         const docRef = await addDoc(collection(state.db, 'requests'), newRequest);
@@ -468,7 +480,7 @@ export async function handleRequestFormSubmit(e) {
         await createInAppNotification({
             recipientRole: 'General Manager',
             title: isPO ? 'New Purchase Order Submitted' : 'New Department Requisition',
-            message: `${department} (${state.auth.currentUser?.email || 'Staff'}) submitted request #${docRef.id.substring(0, 8)} for ${items.length} item(s) (Total: ${formatMoney(totalCost, curr)}). Awaiting approval.`,
+            message: `${department} (${state.auth.currentUser?.email || 'Staff'}) submitted request #${docRef.id.substring(0, 8)} for ${items.length} item(s) (Total: ${formatMoney(totals.totalCost, curr)}). Awaiting approval.`,
             type: 'new_request',
             requestId: docRef.id,
             requestType: requestType,
@@ -489,13 +501,33 @@ export async function handleRequestFormSubmit(e) {
 }
 
 /**
- * Updates request status (Approve / Reject) with optional approval notes.
+ * Updates request status (Approve / Reject) with optional approval notes and budget overrun confirmation.
  */
-export async function updateRequestStatus(id, newStatus, approvalNotes = '') {
+export async function updateRequestStatus(id, newStatus, approvalNotes = '', { skipBudgetConfirm = false } = {}) {
     if (!hasPermission(state.userRole, 'approve_requests')) {
         showNotification("You don't have permission to approve or reject requests.", true);
         return;
     }
+
+    if (newStatus === 'Approved' && !skipBudgetConfirm) {
+        const cachedReq = (state.allRequestsCache || []).find(r => r.id === id);
+        if (cachedReq) {
+            const impact = computeBudgetImpact({
+                req: cachedReq,
+                budgets: state.budgetsCache,
+                requests: state.allRequestsCache
+            });
+            if (impact.hasBudget && impact.wouldExceed) {
+                const curr = getHotelSettings().currency;
+                showConfirmModal(
+                    `Budget Overrun Alert: Approving this ${cachedReq.department} request exceeds the ${impact.period} budget by ${formatMoney(impact.exceededBy, curr)}. Proceed with executive approval anyway?`,
+                    () => updateRequestStatus(id, newStatus, approvalNotes, { skipBudgetConfirm: true })
+                );
+                return;
+            }
+        }
+    }
+
     showLoadingOverlay();
     try {
         const reqDocRef = doc(state.db, 'requests', id);
@@ -701,7 +733,10 @@ export async function handleMarkAsOrdered(e) {
     }
 
     const reqId = document.getElementById('order-po-id').value;
+    const vendorId = (document.getElementById('order-po-vendor-id')?.value || '').trim();
     const supplier = document.getElementById('order-po-supplier').value.trim();
+    const supplierTin = (document.getElementById('order-po-tin')?.value || '').trim();
+    const paymentTerms = (document.getElementById('order-po-payment-terms')?.value || 'Net 30').trim();
     const orderRef = document.getElementById('order-po-ref').value.trim();
     const deliveryDate = document.getElementById('order-po-delivery-date').value;
     const notes = document.getElementById('order-po-notes').value.trim();
@@ -715,7 +750,10 @@ export async function handleMarkAsOrdered(e) {
     try {
         const updateData = {
             status: 'Ordered',
+            vendorId: vendorId || '',
             supplier: supplier,
+            supplierTin: supplierTin || '',
+            paymentTerms: paymentTerms || 'Net 30',
             orderRef: orderRef || '',
             expectedDeliveryDate: deliveryDate,
             purchasingNotes: notes || '',
@@ -725,6 +763,16 @@ export async function handleMarkAsOrdered(e) {
         };
 
         await setDoc(doc(state.db, 'requests', reqId), updateData, { merge: true });
+        if (vendorId) {
+            try {
+                await updateDoc(doc(state.db, 'vendors', vendorId), {
+                    orderCount: increment(1),
+                    lastOrderAt: serverTimestamp()
+                });
+            } catch (_) {
+                // ignore optional vendor stats failure
+            }
+        }
         hideOrderPOModal();
         showNotification(`Order placed with ${supplier}! Request is now Ordered. Storekeeper will receive goods upon delivery.`);
 
@@ -966,8 +1014,9 @@ export async function handleReceiveGoodsSubmit(e) {
         return;
     }
 
-    // Read all inputs for received quantities and actual unit prices
+    // Read all inputs for received quantities, damaged/short units, and actual unit prices
     const qtyInputs = document.querySelectorAll('#receive-goods-form .receive-goods-qty-input');
+    const damagedInputs = document.querySelectorAll('#receive-goods-form .receive-goods-damaged-input');
     const priceInputs = document.querySelectorAll('#receive-goods-form .receive-goods-price-input');
 
     const receiveMap = {};
@@ -976,8 +1025,16 @@ export async function handleReceiveGoodsSubmit(e) {
     qtyInputs.forEach(input => {
         const idx = parseInt(input.dataset.index, 10);
         const qty = Math.max(0, parseFloat(input.value) || 0);
-        receiveMap[idx] = { qty };
+        receiveMap[idx] = { qty, damaged: 0 };
         totalReceivedThisTime += qty;
+    });
+
+    damagedInputs.forEach(input => {
+        const idx = parseInt(input.dataset.index, 10);
+        const dmg = Math.max(0, parseFloat(input.value) || 0);
+        if (receiveMap[idx]) {
+            receiveMap[idx].damaged = dmg;
+        }
     });
 
     priceInputs.forEach(input => {
@@ -1043,6 +1100,7 @@ export async function handleReceiveGoodsSubmit(e) {
             const createdByNormName = new Map();
             const updatedItems = [...items];
             const movementsToWrite = [];
+            const priceAlerts = [];
 
             for (let i = 0; i < updatedItems.length; i++) {
                 const entry = receiveMap[i];
@@ -1072,8 +1130,15 @@ export async function handleReceiveGoodsSubmit(e) {
                         ? Number((((currentStock * currentPrice) + (receivedBaseQty * actualBaseUnitPrice)) / newStock).toFixed(2))
                         : (actualBaseUnitPrice > 0 ? Number(actualBaseUnitPrice.toFixed(2)) : currentPrice);
 
+                    const pctJump = computePriceChangePct(currentPrice, actualBaseUnitPrice);
+                    if (pctJump !== null && pctJump >= 10) {
+                        priceAlerts.push(`${item.name} (+${pctJump}%)`);
+                    }
+
                     invState.runningStock = newStock;
                     invState.runningPrice = newPrice;
+                    invState.lastSupplier = reqData.supplier || '';
+                    invState.lastVendorPrice = actualBaseUnitPrice > 0 ? Number(actualBaseUnitPrice.toFixed(2)) : currentPrice;
 
                     movementsToWrite.push(buildMovementEntry({
                         itemId: invState.ref.id,
@@ -1136,6 +1201,7 @@ export async function handleReceiveGoodsSubmit(e) {
                 updatedItems[i] = {
                     ...item,
                     receivedQuantity: roundQty((item.receivedQuantity || 0) + toReceive),
+                    damagedQuantity: roundQty((item.damagedQuantity || 0) + (entry.damaged || 0)),
                     actualPrice: actualUnitPrice > 0 ? actualUnitPrice : item.price
                 };
             }
@@ -1145,9 +1211,14 @@ export async function handleReceiveGoodsSubmit(e) {
 
             // Write Phase
             liveInventory.forEach((invState) => {
+                const supplierMeta = {
+                    ...(invState.lastSupplier ? { lastSupplier: invState.lastSupplier } : { lastSupplier: reqData.supplier || '' }),
+                    ...(invState.lastVendorPrice !== undefined ? { lastVendorPrice: invState.lastVendorPrice } : { lastVendorPrice: invState.runningPrice })
+                };
                 if (invState.isNew) {
                     transaction.set(invState.ref, {
                         ...invState.data,
+                        ...supplierMeta,
                         stock: invState.runningStock,
                         price: invState.runningPrice,
                         createdAt: serverTimestamp(),
@@ -1155,6 +1226,7 @@ export async function handleReceiveGoodsSubmit(e) {
                     });
                 } else {
                     transaction.set(invState.ref, {
+                        ...supplierMeta,
                         stock: invState.runningStock,
                         price: invState.runningPrice,
                         updatedAt: serverTimestamp()
@@ -1175,7 +1247,7 @@ export async function handleReceiveGoodsSubmit(e) {
                 received: allFulfilled
             }, { merge: true });
 
-            return { allFulfilled, reqData };
+            return { allFulfilled, reqData, priceAlerts };
         });
 
         hideReceiveGoodsModal();
@@ -1184,11 +1256,15 @@ export async function handleReceiveGoodsSubmit(e) {
             : `PO #${reqId.substring(0, 8)} partially received (${totalReceivedThisTime} units). Stock increased.`
         );
 
+        const priceAlertNote = txResult.priceAlerts?.length
+            ? ` Price hike alert (>=10%): ${txResult.priceAlerts.join(', ')}.`
+            : '';
+
         // Notify Purchasing team that items have arrived
         await createInAppNotification({
             recipientRole: 'Purchasing',
             title: txResult.allFulfilled ? 'PO Delivery Fully Received' : 'PO Delivery Partially Received',
-            message: `${totalReceivedThisTime} unit(s) received into store for PO #${reqId.substring(0, 8)}${invoice ? ' (Inv: ' + invoice + ')' : ''}.`,
+            message: `${totalReceivedThisTime} unit(s) received into store for PO #${reqId.substring(0, 8)}${invoice ? ' (Inv: ' + invoice + ')' : ''}.${priceAlertNote}`,
             type: 'received',
             requestId: reqId,
             requestType: 'purchase',
@@ -1822,6 +1898,9 @@ export function downloadRequestVoucherPdf(requestId) {
             ['Requested By:', req.createdByEmail || 'N/A', 'Date Submitted:', createdStr],
             ['Required By:', req.requiredBy || 'N/A', isPO ? 'Supplier:' : 'Issued To:', isPO ? (req.supplier || 'TBD') : (req.lastIssuedRecipient || 'Pending Issue')]
         ];
+        if (isPO && (req.supplierTin || req.paymentTerms)) {
+            metaRows.push(['Supplier TIN:', req.supplierTin || 'N/A', 'Payment Terms:', req.paymentTerms || 'Net 30']);
+        }
         if (isPO && (req.orderRef || req.deliveryNote)) {
             metaRows.push(['Order Ref:', req.orderRef || 'N/A', 'Delivery Inv #:', req.deliveryNote || 'Pending']);
         }
@@ -1879,9 +1958,24 @@ export function downloadRequestVoucherPdf(requestId) {
         });
 
         cursorY = pdf.lastAutoTable.finalY + 6;
+        const hasBreakdown = Number(req.taxRate || 0) > 0 || Number(req.discountAmount || 0) > 0;
+        if (hasBreakdown) {
+            pdf.setFontSize(9);
+            pdf.setTextColor(70);
+            pdf.text(`Items Subtotal: ${formatMoney(req.subtotalCost || 0, cfg.currency)}`, pageWidth - margin, cursorY, { align: 'right' });
+            cursorY += 5;
+            if (Number(req.discountAmount || 0) > 0) {
+                pdf.text(`Discount: -${formatMoney(req.discountAmount, cfg.currency)}`, pageWidth - margin, cursorY, { align: 'right' });
+                cursorY += 5;
+            }
+            if (Number(req.taxRate || 0) > 0) {
+                pdf.text(`${req.taxLabel || 'VAT'} (${Number(req.taxRate)}%): ${formatMoney(req.taxAmount || 0, cfg.currency)}`, pageWidth - margin, cursorY, { align: 'right' });
+                cursorY += 5;
+            }
+        }
         pdf.setFontSize(11);
         pdf.setTextColor(26, 54, 93);
-        pdf.text(`Total Estimated Value: ${formatMoney(req.totalCost || 0, cfg.currency)}`, pageWidth - margin, cursorY, { align: 'right' });
+        pdf.text(`Grand Total: ${formatMoney(req.totalCost || 0, cfg.currency)}`, pageWidth - margin, cursorY, { align: 'right' });
 
         if (req.notes || req.approvalNotes) {
             cursorY += 8;
@@ -1922,6 +2016,131 @@ export function downloadRequestVoucherPdf(requestId) {
     } catch (err) {
         console.error('Voucher PDF error:', err);
         showNotification("Could not generate voucher PDF.", true);
+    }
+}
+
+/**
+ * Generates an official Goods Received Note (GRN) PDF for inspected vendor deliveries.
+ */
+export function downloadGrnPdf(requestId) {
+    const req = (state.allRequestsCache || []).find(r => r.id === requestId);
+    if (!req) {
+        showNotification("Purchase Order details not found.", true);
+        return;
+    }
+    const jsPDF = getJsPdfInstance();
+    if (!jsPDF) {
+        showNotification("PDF generation libraries not loaded. Please refresh the page.", true);
+        return;
+    }
+
+    try {
+        const cfg = getHotelSettings();
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        const margin = 15;
+        const pageWidth = pdf.internal.pageSize.getWidth();
+
+        pdf.setFillColor(16, 85, 65);
+        pdf.rect(0, 0, pageWidth, 28, 'F');
+        pdf.setFontSize(16);
+        pdf.setTextColor(255, 255, 255);
+        pdf.text(cfg.hotelName, margin, 13);
+        pdf.setFontSize(10);
+        pdf.text('GOODS RECEIVED NOTE (GRN)', margin, 21);
+        pdf.setFontSize(9);
+        pdf.text(`GRN Ref: #GRN-${req.id.substring(0, 8).toUpperCase()}`, pageWidth - margin, 13, { align: 'right' });
+        pdf.text(`PO Status: ${req.status || 'Received'}`, pageWidth - margin, 21, { align: 'right' });
+
+        if (cfg.hotelAddress) {
+            pdf.setTextColor(90);
+            pdf.setFontSize(8.5);
+            pdf.text(cfg.hotelAddress, margin, 34);
+        }
+
+        const receivedDate = req.lastReceivedAt?.toDate ? req.lastReceivedAt.toDate().toLocaleString() : new Date().toLocaleString();
+        const metaRows = [
+            ['PO Reference:', `#${req.id.substring(0, 8).toUpperCase()}`, 'Date Received:', receivedDate],
+            ['Supplier:', req.supplier || 'Vendor', 'Supplier TIN:', req.supplierTin || 'N/A'],
+            ['Delivery Note / Inv #:', req.deliveryNote || 'N/A', 'Payment Terms:', req.paymentTerms || 'Net 30'],
+            ['Received By:', req.lastReceivedByEmail || 'Storekeeper', 'Ordered By:', req.orderedByEmail || req.createdByEmail || 'N/A']
+        ];
+
+        pdf.autoTable({
+            body: metaRows,
+            startY: cfg.hotelAddress ? 40 : 36,
+            theme: 'grid',
+            styles: { fontSize: 8.5, cellPadding: 2.5 },
+            columnStyles: {
+                0: { fontStyle: 'bold', fillColor: [240, 249, 245], cellWidth: 34 },
+                1: { cellWidth: 56 },
+                2: { fontStyle: 'bold', fillColor: [240, 249, 245], cellWidth: 32 },
+                3: { cellWidth: 58 }
+            },
+            margin: { left: margin, right: margin }
+        });
+
+        let totalAcceptedVal = 0;
+        const head = [['#', 'Item Description', 'Unit', 'Ordered', 'Accepted', 'Damaged/Short', 'Actual Price', 'Accepted Total']];
+        const body = (req.items || []).map((it, idx) => {
+            const ord = Number(it.quantity || 0);
+            const rec = Number(it.receivedQuantity || 0);
+            const dmg = Number(it.damagedQuantity || 0);
+            const price = Number((it.actualPrice > 0 ? it.actualPrice : it.price) || 0);
+            const lineTotal = roundQty(rec * price, 2);
+            totalAcceptedVal += lineTotal;
+            return [idx + 1, it.name || '', it.unit || 'Each', ord, rec, dmg, formatMoney(price, cfg.currency), formatMoney(lineTotal, cfg.currency)];
+        });
+
+        pdf.autoTable({
+            head,
+            body,
+            startY: pdf.lastAutoTable.finalY + 8,
+            headStyles: { fillColor: [16, 85, 65], fontSize: 8 },
+            styles: { fontSize: 8 },
+            columnStyles: {
+                0: { halign: 'center', cellWidth: 9 },
+                3: { halign: 'center' },
+                4: { halign: 'center', fontStyle: 'bold' },
+                5: { halign: 'center' },
+                6: { halign: 'right' },
+                7: { halign: 'right', fontStyle: 'bold' }
+            },
+            margin: { left: margin, right: margin }
+        });
+
+        let cursorY = pdf.lastAutoTable.finalY + 7;
+        pdf.setFontSize(11);
+        pdf.setTextColor(16, 85, 65);
+        pdf.text(`Total Accepted Delivery Value: ${formatMoney(totalAcceptedVal, cfg.currency)}`, pageWidth - margin, cursorY, { align: 'right' });
+
+        if (req.receiveNotes) {
+            cursorY += 8;
+            pdf.setFontSize(8.5);
+            pdf.setTextColor(70);
+            pdf.text(`Inspection / Storage Notes: ${req.receiveNotes}`, margin, cursorY, { maxWidth: pageWidth - margin * 2 });
+        }
+
+        const sigY = Math.max(cursorY + 24, 240);
+        const colW = (pageWidth - margin * 2) / 3;
+        pdf.setDrawColor(160);
+        pdf.setFontSize(8.5);
+        pdf.setTextColor(80);
+        ['Delivered By (Supplier / Driver)', 'Inspected & Received (Storekeeper)', 'Verified By (Purchasing / Finance)'].forEach((lbl, idx) => {
+            const x1 = margin + idx * colW + 3;
+            const x2 = margin + (idx + 1) * colW - 3;
+            pdf.line(x1, sigY, x2, sigY);
+            pdf.text(lbl, (x1 + x2) / 2, sigY + 5, { align: 'center' });
+        });
+
+        pdf.setFontSize(8);
+        pdf.setTextColor(150);
+        pdf.text(`${cfg.footerNote} — GRN Generated ${new Date().toLocaleString()}`, pageWidth / 2, pdf.internal.pageSize.getHeight() - 8, { align: 'center' });
+
+        pdf.save(`GRN_${req.id.substring(0, 8)}.pdf`);
+        showNotification("Goods Received Note (GRN) PDF downloaded!");
+    } catch (err) {
+        console.error('GRN PDF error:', err);
+        showNotification("Could not generate GRN PDF.", true);
     }
 }
 
@@ -2066,6 +2285,8 @@ export async function handleSaveHotelSettings(e) {
     const currency = (document.getElementById('setting-currency')?.value || '').trim();
     const hotelAddress = (document.getElementById('setting-hotel-address')?.value || '').trim();
     const footerNote = (document.getElementById('setting-footer-note')?.value || '').trim();
+    const taxLabel = (document.getElementById('setting-tax-label')?.value || 'VAT').trim() || 'VAT';
+    const defaultTaxRate = Math.max(0, Math.min(100, parseFloat(document.getElementById('setting-default-tax')?.value) || 0));
 
     if (!hotelName || !currency) {
         showNotification("Hotel Name and Currency Label are required.", true);
@@ -2078,12 +2299,14 @@ export async function handleSaveHotelSettings(e) {
             hotelName,
             currency,
             hotelAddress,
+            taxLabel,
+            defaultTaxRate,
             footerNote: footerNote || DEFAULT_HOTEL_SETTINGS.footerNote,
             updatedAt: serverTimestamp(),
             updatedBy: state.userId || 'admin'
         };
         await setDoc(doc(state.db, 'settings', 'general'), payload, { merge: true });
-        state.hotelSettings = { ...DEFAULT_HOTEL_SETTINGS, hotelName, currency, hotelAddress, footerNote: payload.footerNote };
+        state.hotelSettings = { ...DEFAULT_HOTEL_SETTINGS, hotelName, currency, hotelAddress, taxLabel, defaultTaxRate, footerNote: payload.footerNote };
         applyHotelBranding();
         updateTotalCost();
         showNotification("Hotel identity & currency settings updated!");
@@ -2963,3 +3186,277 @@ export function handleExecuteRestore() {
         }
     );
 }
+
+// ============================================================================
+// Vendor Master CRUD Actions
+// ============================================================================
+
+export async function handleSaveVendor(e) {
+    e.preventDefault();
+    if (!hasPermission(state.userRole, 'manage_vendors')) {
+        showNotification("You don't have permission to manage vendors.", true);
+        return;
+    }
+
+    const vendorId = (document.getElementById('vendor-id')?.value || '').trim();
+    const name = (document.getElementById('vendor-name')?.value || '').trim();
+    const tinNumber = (document.getElementById('vendor-tin')?.value || '').trim();
+    const category = (document.getElementById('vendor-category')?.value || 'General / Multi-Category').trim();
+    const contactPerson = (document.getElementById('vendor-contact')?.value || '').trim();
+    const phone = (document.getElementById('vendor-phone')?.value || '').trim();
+    const email = (document.getElementById('vendor-email')?.value || '').trim();
+    const paymentTerms = (document.getElementById('vendor-terms')?.value || 'Net 30').trim();
+    const status = (document.getElementById('vendor-status')?.value || 'Active').trim();
+    const notes = (document.getElementById('vendor-notes')?.value || '').trim();
+
+    if (!name) {
+        showNotification("Vendor / Company Name is required.", true);
+        return;
+    }
+
+    const payload = {
+        name, tinNumber, category, contactPerson, phone, email, paymentTerms, status, notes,
+        updatedAt: serverTimestamp(),
+        updatedBy: state.userId || 'staff'
+    };
+
+    showLoadingOverlay();
+    try {
+        if (vendorId) {
+            await setDoc(doc(state.db, 'vendors', vendorId), payload, { merge: true });
+            showNotification(`Vendor "${name}" updated.`);
+        } else {
+            await addDoc(collection(state.db, 'vendors'), {
+                ...payload,
+                orderCount: 0,
+                createdAt: serverTimestamp(),
+                createdBy: state.userId || 'staff'
+            });
+            showNotification(`Vendor "${name}" registered.`);
+        }
+        hideVendorModal();
+    } catch (err) {
+        console.error("Error saving vendor:", err);
+        showNotification("Failed to save vendor record.", true);
+    } finally {
+        hideLoadingOverlay();
+    }
+}
+
+export function handleEditVendor(vendorId) {
+    if (!hasPermission(state.userRole, 'manage_vendors')) {
+        showNotification("You don't have permission to edit vendors.", true);
+        return;
+    }
+    const vendor = (state.vendorsCache || []).find(v => v.id === vendorId);
+    if (!vendor) {
+        showNotification("Vendor record not found.", true);
+        return;
+    }
+    showVendorModal(vendor);
+}
+
+export function handleDeleteVendor(vendorId) {
+    if (normalizeRole(state.userRole) !== 'System Administrator' && normalizeRole(state.userRole) !== 'General Manager') {
+        showNotification("Only General Managers or Administrators can delete vendors (set status to Inactive instead).", true);
+        return;
+    }
+    const vendor = (state.vendorsCache || []).find(v => v.id === vendorId);
+    const label = vendor?.name || vendorId;
+    showConfirmModal(`Delete vendor "${label}"? Historical POs keep their saved supplier names.`, async () => {
+        showLoadingOverlay();
+        try {
+            await deleteDoc(doc(state.db, 'vendors', vendorId));
+            showNotification(`Vendor "${label}" deleted.`);
+        } catch (err) {
+            console.error("Error deleting vendor:", err);
+            showNotification("Failed to delete vendor.", true);
+        } finally {
+            hideLoadingOverlay();
+        }
+    });
+}
+
+// ============================================================================
+// Physical Stocktake Count Sheet PDF & Atomic Variance Posting
+// ============================================================================
+
+export function downloadStocktakeSheetPdf() {
+    if (!hasPermission(state.userRole, 'manage_inventory')) {
+        showNotification("You don't have permission to print stocktake count sheets.", true);
+        return;
+    }
+    const jsPDF = getJsPdfInstance();
+    if (!jsPDF) {
+        showNotification("PDF generation libraries not loaded. Please refresh the page.", true);
+        return;
+    }
+
+    const catFilter = document.getElementById('stocktake-category-filter')?.value || '';
+    const isBlind = !!document.getElementById('stocktake-blind-pdf')?.checked;
+    let items = [...(state.inventoryItemsCache || [])];
+    if (catFilter) items = items.filter(i => (i.category || 'Other') === catFilter);
+
+    if (items.length === 0) {
+        showNotification("No items match the selected category filter.", true);
+        return;
+    }
+
+    try {
+        const cfg = getHotelSettings();
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        const margin = 14;
+        const pageWidth = pdf.internal.pageSize.getWidth();
+
+        pdf.setFillColor(76, 29, 149);
+        pdf.rect(0, 0, pageWidth, 26, 'F');
+        pdf.setFontSize(15);
+        pdf.setTextColor(255, 255, 255);
+        pdf.text(`${cfg.hotelName} — PHYSICAL INVENTORY COUNT SHEET`, margin, 12);
+        pdf.setFontSize(9);
+        pdf.text(`Category: ${catFilter || 'All Categories'}  |  Mode: ${isBlind ? 'Blind Count (System Qty Hidden)' : 'Open Verification'}  |  Printed: ${new Date().toLocaleString()}`, margin, 20);
+
+        const head = isBlind
+            ? [['#', 'Item Name', 'Category', 'Unit', 'Physical Count', 'Remarks']]
+            : [['#', 'Item Name', 'Category', 'Unit', 'System Qty', 'Physical Count', 'Variance']];
+
+        const body = items.map((it, idx) => isBlind
+            ? [idx + 1, it.name || '', it.category || 'General', it.unit || 'Each', '', '']
+            : [idx + 1, it.name || '', it.category || 'General', it.unit || 'Each', roundQty(it.stock || 0), '', '']
+        );
+
+        pdf.autoTable({
+            head,
+            body,
+            startY: 32,
+            headStyles: { fillColor: [91, 33, 182], fontSize: 8 },
+            styles: { fontSize: 8, minCellHeight: 7.5 },
+            columnStyles: isBlind
+                ? { 0: { halign: 'center', cellWidth: 9 }, 4: { cellWidth: 28 }, 5: { cellWidth: 42 } }
+                : { 0: { halign: 'center', cellWidth: 9 }, 4: { halign: 'center', cellWidth: 22 }, 5: { cellWidth: 26 }, 6: { cellWidth: 22 } },
+            margin: { left: margin, right: margin },
+            didDrawPage: (data) => {
+                pdf.setFontSize(8);
+                pdf.setTextColor(140);
+                pdf.text(`${cfg.footerNote} — Count Sheet Page ${data.pageNumber}`, pageWidth / 2, pdf.internal.pageSize.getHeight() - 8, { align: 'center' });
+            }
+        });
+
+        const sigY = Math.min(pdf.lastAutoTable.finalY + 22, pdf.internal.pageSize.getHeight() - 20);
+        const colW = (pageWidth - margin * 2) / 3;
+        pdf.setDrawColor(160);
+        pdf.setFontSize(8.5);
+        pdf.setTextColor(80);
+        ['Counted By (Storekeeper)', 'Witnessed By (Finance / Cost Control)', 'Approved By (GM)'].forEach((lbl, idx) => {
+            const x1 = margin + idx * colW + 3;
+            const x2 = margin + (idx + 1) * colW - 3;
+            pdf.line(x1, sigY, x2, sigY);
+            pdf.text(lbl, (x1 + x2) / 2, sigY + 5, { align: 'center' });
+        });
+
+        pdf.save(`Stocktake_Sheet_${(catFilter || 'All').replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`);
+        showNotification("Physical Stocktake Count Sheet PDF downloaded!");
+    } catch (err) {
+        console.error('Stocktake PDF error:', err);
+        showNotification("Could not generate count sheet PDF.", true);
+    }
+}
+
+let isPostingStocktake = false;
+
+export async function handlePostStocktakeAdjustments() {
+    if (!hasPermission(state.userRole, 'manage_inventory')) {
+        showNotification("You don't have permission to post stocktake adjustments.", true);
+        return;
+    }
+    if (isPostingStocktake) return;
+
+    const entries = Object.entries(state.stocktakeDraftCounts || {})
+        .filter(([, v]) => v !== '' && v !== null && v !== undefined && Number.isFinite(Number(v)) && Number(v) >= 0)
+        .map(([id, v]) => ({ id, counted: roundQty(Number(v)) }));
+
+    if (entries.length === 0) {
+        showNotification("Enter physical counted quantities for at least one item first.", true);
+        return;
+    }
+
+    const invMap = new Map((state.inventoryItemsCache || []).map(i => [i.id, i]));
+    const changedPreview = entries.filter(e => {
+        const cur = invMap.get(e.id);
+        return cur && Math.abs(e.counted - Number(cur.stock || 0)) >= 0.001;
+    });
+
+    if (changedPreview.length === 0) {
+        showNotification("All entered physical counts already match system stock — no adjustments needed.");
+        return;
+    }
+
+    showConfirmModal(
+        `Post physical stocktake adjustments for ${changedPreview.length} item(s) with variances? Inventory stock and the immutable Stock Movement audit ledger will update atomically.`,
+        async () => {
+            isPostingStocktake = true;
+            showLoadingOverlay();
+            try {
+                let postedCount = 0;
+                for (let i = 0; i < changedPreview.length; i += 120) {
+                    const chunk = changedPreview.slice(i, i + 120);
+                    const chunkAdjusted = await runTransaction(state.db, async (tx) => {
+                        const refs = chunk.map(c => doc(state.db, 'inventory', c.id));
+                        const snaps = [];
+                        for (const ref of refs) {
+                            snaps.push(await tx.get(ref));
+                        }
+
+                        let countInChunk = 0;
+                        snaps.forEach((snap, idx) => {
+                            if (!snap.exists()) return;
+                            const liveData = snap.data();
+                            const prevStock = Number(liveData.stock || 0);
+                            const counted = chunk[idx].counted;
+                            const diff = roundQty(counted - prevStock);
+                            if (Math.abs(diff) < 0.001) return;
+
+                            const unit = liveData.unit || 'units';
+                            const isGain = diff > 0;
+                            const qty = Math.abs(diff);
+
+                            tx.set(refs[idx], {
+                                stock: counted,
+                                lastStocktakeAt: serverTimestamp(),
+                                updatedAt: serverTimestamp()
+                            }, { merge: true });
+
+                            tx.set(doc(collection(state.db, 'stock_movements')), buildMovementEntry({
+                                itemId: snap.id,
+                                itemName: liveData.name || 'Item',
+                                category: liveData.category || 'General',
+                                type: isGain ? 'IN' : 'OUT',
+                                quantity: qty,
+                                previousStock: prevStock,
+                                newStock: counted,
+                                unitPrice: Number(liveData.price || 0),
+                                department: 'Store',
+                                recipient: isGain ? 'Physical Stocktake Count (+Gain)' : 'Physical Stocktake Count (-Variance)',
+                                reason: `Physical Stocktake Count Adjustment (${isGain ? '+' : '-'}${qty} ${unit})`
+                            }));
+                            countInChunk++;
+                        });
+                        return countInChunk;
+                    });
+                    postedCount += chunkAdjusted;
+                }
+
+                state.stocktakeDraftCounts = {};
+                hideStocktakeModal();
+                showNotification(`Posted ${postedCount} stocktake variance adjustment(s) cleanly!`);
+            } catch (err) {
+                console.error("Stocktake post failed:", err);
+                showNotification("Failed to post stocktake adjustments.", true);
+            } finally {
+                isPostingStocktake = false;
+                hideLoadingOverlay();
+            }
+        }
+    );
+}
+

@@ -14,6 +14,7 @@ import {
     showUserModal, hideUserModal, renderUsersTable,
     renderDashboard, renderInventory, renderMyRequests,
     applyReportFilters, renderStockMovements, renderReconciliationContent,
+    renderVendorsTable, showVendorModal, hideVendorModal, showStocktakeModal, hideStocktakeModal,
     showIssueModal, hideIssueModal,
     showReceiveModal, hideReceiveModal,
     showIssueRequisitionModal, hideIssueRequisitionModal,
@@ -24,23 +25,25 @@ import {
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix,
     handleItemRowNameChange, handleItemRowUnitChange, renderNotificationBell, updateSidebarBadges, toggleNotificationDropdown,
     renderStoreOperations
-} from './ui.js?v=3.4';
+} from './ui.js?v=3.5';
 import {
     handleLogin, handleForgotPassword, handleLogout, handleCreateUser,
     handleEditUser, handleSaveUserEdit, handleResetUserPassword, handleDeleteUser,
     handleRequestFormSubmit, updateRequestStatus, markRequestAsReceived,
     handleItemFormSubmit, deleteInventoryItem, handleIssueStock, handleReceiveStock,
     handleMarkAsOrdered, handleIssueRequisitionSubmit, handleReceiveGoodsSubmit,
-    handleSetBudget, downloadReportPdf, downloadReportCsv, downloadRequestVoucherPdf, handleQuickOrderLowStock,
+    handleSetBudget, downloadReportPdf, downloadReportCsv, downloadRequestVoucherPdf, downloadGrnPdf, handleQuickOrderLowStock,
     handleAddDepartment, handleDeleteDepartment, handleSaveRolePermissions, handleResetRolePermissions,
     handleSaveHotelSettings, handleMarkAllNotificationsRead, handleNotificationClick,
     handleBaselineOpeningStock,
     loadMoreRequests, loadMoreStockMovements,
     handleSaveBackupConfig, handleDownloadBackup, handleUploadCloudinaryBackup,
     handleInspectLocalBackupFile, handleLoadCloudinaryBackup,
-    handleExecuteRestore, handleCancelRestore
-} from './actions.js?v=3.4';
-import { initializeFirebase } from './auth.js?v=3.4';
+    handleExecuteRestore, handleCancelRestore,
+    handleSaveVendor, handleEditVendor, handleDeleteVendor,
+    downloadStocktakeSheetPdf, handlePostStocktakeAdjustments
+} from './actions.js?v=3.5';
+import { initializeFirebase } from './auth.js?v=3.5';
 
 // ============================================================================
 // DOM Content Loaded — Wire everything up
@@ -92,6 +95,8 @@ document.addEventListener('DOMContentLoaded', () => {
             handleMarkAsOrdered(e);
         } else if (e.target.id === 'receive-goods-form') {
             handleReceiveGoodsSubmit(e);
+        } else if (e.target.id === 'vendor-form') {
+            handleSaveVendor(e);
         }
     });
 
@@ -226,24 +231,51 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // --- Order / Request Type Radio Selector ---
+    // --- Order / Request Type Radio Selector & Tax/Discount Calculation ---
     document.querySelectorAll('input[name="req-type"]').forEach(radio => {
         radio.addEventListener('change', () => {
             const reqLabel = document.getElementById('req-type-requisition-label');
             const poLabel = document.getElementById('req-type-po-label');
+            const taxInp = document.getElementById('req-tax-rate');
             if (radio.value === 'Requisition') {
                 if (reqLabel) reqLabel.className = 'flex items-start p-3 border rounded-lg cursor-pointer transition-colors bg-white dark:bg-gray-800 border-hotel-accent/60 shadow-sm';
                 if (poLabel) poLabel.className = 'flex items-start p-3 border rounded-lg cursor-pointer transition-colors bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 opacity-75';
+                if (taxInp) taxInp.value = 0;
             } else {
                 if (poLabel) poLabel.className = 'flex items-start p-3 border rounded-lg cursor-pointer transition-colors bg-white dark:bg-gray-800 border-emerald-500/60 shadow-sm';
                 if (reqLabel) reqLabel.className = 'flex items-start p-3 border rounded-lg cursor-pointer transition-colors bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 opacity-75';
+                if (taxInp) taxInp.value = Number(state.hotelSettings?.defaultTaxRate || 0);
             }
             // Immediately re-validate stock hints across all existing item rows
             document.querySelectorAll('#items-container .item-row').forEach(row => {
                 handleItemRowNameChange(row);
             });
+            updateTotalCost();
         });
     });
+
+    const reqTaxRateInput = document.getElementById('req-tax-rate');
+    if (reqTaxRateInput) reqTaxRateInput.addEventListener('input', updateTotalCost);
+    const reqDiscountInput = document.getElementById('req-discount');
+    if (reqDiscountInput) reqDiscountInput.addEventListener('input', updateTotalCost);
+    const reqVat15Btn = document.getElementById('req-apply-15-vat-btn');
+    if (reqVat15Btn) {
+        reqVat15Btn.addEventListener('click', () => {
+            if (reqTaxRateInput) reqTaxRateInput.value = 15;
+            updateTotalCost();
+        });
+    }
+
+    // --- Vendors Search & Add Modal ---
+    const vendorsSearch = document.getElementById('vendors-search');
+    if (vendorsSearch) {
+        vendorsSearch.addEventListener('input', debounce((e) => {
+            state.vendorsUiPage = 1;
+            renderVendorsTable(state.vendorsCache, e.target.value);
+        }, 150));
+    }
+    const addVendorBtn = document.getElementById('show-add-vendor-modal-btn');
+    if (addVendorBtn) addVendorBtn.addEventListener('click', () => showVendorModal());
 
     // --- Search (debounced live search to prevent mobile frame drops) ---
     document.getElementById('my-requests-search').addEventListener('input', debounce((e) => {
@@ -457,6 +489,20 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // Physical Stocktake / Count Sheet Modal
+        if (e.target.closest('#open-stocktake-btn')) {
+            showStocktakeModal();
+            return;
+        }
+        if (e.target.closest('#stocktake-print-pdf-btn')) {
+            downloadStocktakeSheetPdf();
+            return;
+        }
+        if (e.target.closest('#stocktake-post-btn')) {
+            handlePostStocktakeAdjustments();
+            return;
+        }
+
         // Auto-baseline opening stock (all items)
         if (e.target.closest('#recon-auto-baseline-btn')) {
             handleBaselineOpeningStock();
@@ -500,10 +546,27 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Print / Download official Voucher PDF (PO or Requisition Slip)
+        // Print / Download official Voucher PDF (PO or Requisition Slip) & GRN PDF
         const voucherPdfBtn = e.target.closest('.download-voucher-pdf-btn');
         if (voucherPdfBtn) {
             downloadRequestVoucherPdf(voucherPdfBtn.dataset.id);
+            return;
+        }
+        const grnPdfBtn = e.target.closest('.download-grn-pdf-btn');
+        if (grnPdfBtn) {
+            downloadGrnPdf(grnPdfBtn.dataset.id);
+            return;
+        }
+
+        // Vendor Directory actions
+        const editVendorBtn = e.target.closest('.edit-vendor-btn');
+        if (editVendorBtn) {
+            handleEditVendor(editVendorBtn.dataset.id);
+            return;
+        }
+        const deleteVendorBtn = e.target.closest('.delete-vendor-btn');
+        if (deleteVendorBtn) {
+            handleDeleteVendor(deleteVendorBtn.dataset.id);
             return;
         }
 
@@ -553,6 +616,9 @@ document.addEventListener('DOMContentLoaded', () => {
             } else if (table === 'recon') {
                 state.reconUiPage = Math.max(1, (state.reconUiPage || 1) + delta);
                 renderReconciliationContent();
+            } else if (table === 'vendors') {
+                state.vendorsUiPage = Math.max(1, (state.vendorsUiPage || 1) + delta);
+                renderVendorsTable(state.vendorsCache, document.getElementById('vendors-search')?.value || '');
             }
             return;
         }

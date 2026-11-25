@@ -43,6 +43,9 @@ export const PURCHASE_STATUSES = ['Pending', 'Approved', 'Ordered', 'Partially R
 /** Measurement units for requested items and inventory */
 export const UNITS = ['Kg', 'Liter', 'Each', 'Box', 'Bottle', 'Bag', 'Pack', 'Roll', 'Can', 'Set', 'Carton'];
 
+/** Standard supplier payment terms */
+export const PAYMENT_TERMS = ['Cash on Delivery', 'Net 7', 'Net 15', 'Net 30', 'Net 60', 'Advance Payment'];
+
 /**
  * Default package conversion factors if not explicitly specified on the item.
  * E.g., when ordering 1 Box or Bag of an item whose base unit is Kg, Each, or Liter.
@@ -98,6 +101,7 @@ export const AVAILABLE_PERMISSIONS = [
     { id: 'manage_inventory', label: 'Manage Inventory & Fill Store', desc: 'Can receive vendor shipments, fill store stock, issue goods to staff, and edit SKUs' },
     { id: 'manage_budgets', label: 'Manage Department Budgets', desc: 'Can set and view monthly department spending limits' },
     { id: 'view_reports', label: 'View Reports & Exports', desc: 'Can view report summaries and export PDF/CSV files' },
+    { id: 'manage_vendors', label: 'Manage Vendors & Suppliers', desc: 'Can add, edit, or remove approved hotel suppliers' },
     { id: 'manage_users', label: 'Manage Users & Accounts', desc: 'Can create, edit, suspend, and reset staff accounts' },
     { id: 'manage_settings', label: 'Manage Hotel Settings', desc: 'Can add departments and customize role permissions' }
 ];
@@ -107,11 +111,11 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'System Administrator': [
         'create_request', 'view_all_requests', 'approve_requests',
         'manage_inventory', 'manage_budgets', 'view_reports',
-        'manage_users', 'manage_settings'
+        'manage_vendors', 'manage_users', 'manage_settings'
     ],
     'General Manager': [
         'create_request', 'view_all_requests', 'approve_requests',
-        'manage_budgets', 'view_reports'
+        'manage_budgets', 'view_reports', 'manage_vendors'
     ],
     'Storekeeper': [
         'manage_inventory', 'view_all_requests', 'create_request'
@@ -120,7 +124,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
         'manage_inventory', 'view_all_requests', 'create_request'
     ],
     'Purchasing': [
-        'create_request', 'view_all_requests', 'view_reports'
+        'create_request', 'view_all_requests', 'view_reports', 'manage_vendors'
     ],
     'User': [
         'create_request'
@@ -147,7 +151,9 @@ export const DEFAULT_HOTEL_SETTINGS = {
     hotelName: 'Hotel PO System',
     currency: 'Birr',
     hotelAddress: '',
-    footerNote: 'Official Hotel Procurement & Store Record'
+    footerNote: 'Official Hotel Procurement & Store Record',
+    taxLabel: 'VAT',
+    defaultTaxRate: 0
 };
 
 /** Request statuses considered approved / committed for budgets and purchasing metrics */
@@ -224,5 +230,81 @@ export function debounce(fn, delayMs = 150) {
         clearTimeout(timer);
         timer = setTimeout(() => fn.apply(this, args), delayMs);
     };
+}
+
+/**
+ * Computes line-item subtotal, clamped discount, VAT/tax amount, and grand total cleanly.
+ */
+export function computeRequestTotals({ items = [], taxRate = 0, discountAmount = 0 } = {}) {
+    const subtotal = roundQty(
+        (items || []).reduce((acc, it) => acc + ((Number(it?.price) || 0) * (Number(it?.quantity) || 0)), 0),
+        2
+    );
+    const clampedDiscount = roundQty(Math.min(subtotal, Math.max(0, Number(discountAmount) || 0)), 2);
+    const taxableAmount = roundQty(Math.max(0, subtotal - clampedDiscount), 2);
+    const safeTaxRate = roundQty(Math.max(0, Math.min(100, Number(taxRate) || 0)), 2);
+    const taxAmount = roundQty(taxableAmount * (safeTaxRate / 100), 2);
+    const totalCost = roundQty(taxableAmount + taxAmount, 2);
+    return { subtotal, discountAmount: clampedDiscount, taxRate: safeTaxRate, taxAmount, totalCost };
+}
+
+/**
+ * Evaluates a request's financial impact against the department's monthly allocated budget.
+ */
+export function computeBudgetImpact({ req, budgets = [], requests = [] } = {}) {
+    if (!req || !req.department || !Array.isArray(budgets) || budgets.length === 0) {
+        return { hasBudget: false };
+    }
+    const reqDate = req.createdAt?.toDate
+        ? req.createdAt.toDate()
+        : (req.createdAt instanceof Date ? req.createdAt : new Date());
+    const period = `${reqDate.getFullYear()}-${String(reqDate.getMonth() + 1).padStart(2, '0')}`;
+
+    const budgetDoc = budgets.find(b => b.department === req.department && b.month === period);
+    if (!budgetDoc) {
+        return { hasBudget: false, period };
+    }
+
+    const allocated = Number(budgetDoc.amount || 0);
+    const alreadyCommitted = roundQty((requests || []).reduce((sum, r) => {
+        if (!r || r.id === req.id) return sum;
+        if (!COMMITTED_STATUSES.includes(r.status) || r.department !== req.department) return sum;
+        const d = r.createdAt?.toDate ? r.createdAt.toDate() : null;
+        if (!d) return sum;
+        const rPeriod = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        return rPeriod === period ? sum + Number(r.totalCost || 0) : sum;
+    }, 0), 2);
+
+    const requestAmount = roundQty(Number(req.totalCost || 0), 2);
+    const projectedCommitted = roundQty(alreadyCommitted + requestAmount, 2);
+    const remainingBefore = roundQty(allocated - alreadyCommitted, 2);
+    const remainingAfter = roundQty(allocated - projectedCommitted, 2);
+    const wouldExceed = allocated > 0 ? projectedCommitted > (allocated + 0.001) : requestAmount > 0;
+    const exceededBy = wouldExceed ? roundQty(Math.max(0, projectedCommitted - allocated), 2) : 0;
+    const usagePctAfter = allocated > 0 ? roundQty((projectedCommitted / allocated) * 100, 1) : 100;
+
+    return {
+        hasBudget: true,
+        period,
+        allocated,
+        alreadyCommitted,
+        requestAmount,
+        projectedCommitted,
+        remainingBefore,
+        remainingAfter,
+        wouldExceed,
+        exceededBy,
+        usagePctAfter
+    };
+}
+
+/**
+ * Computes percentage unit price change relative to previous base unit price.
+ */
+export function computePriceChangePct(prevPrice, newBasePrice) {
+    const prev = Number(prevPrice);
+    const next = Number(newBasePrice);
+    if (!Number.isFinite(prev) || prev <= 0 || !Number.isFinite(next) || next <= 0) return null;
+    return roundQty(((next - prev) / prev) * 100, 1);
 }
 

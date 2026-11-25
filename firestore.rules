@@ -53,10 +53,13 @@ service cloud.firestore {
     }
 
     // Honors dynamic role permissions stored in settings/permissions while falling back cleanly
+    // for new v3.5 permissions (like manage_vendors) introduced after an older matrix was saved.
     function hasPerm(perm, defaultAllowed) {
       return isAdmin() || (
         isActiveUser() && (
-          exists(permsPath()) && (normalizedRole() in get(permsPath()).data)
+          exists(permsPath()) &&
+          (normalizedRole() in get(permsPath()).data) &&
+          (perm != 'manage_vendors' || ('manage_vendors' in get(permsPath()).data.get('System Administrator', [])))
             ? (perm in get(permsPath()).data[normalizedRole()])
             : defaultAllowed
         )
@@ -167,6 +170,13 @@ service cloud.firestore {
     match /departments/{deptId} {
       allow read: if isActiveUser();
       allow write: if isActiveUser() && hasPerm('manage_settings', isGM());
+    }
+
+    // vendors: approved supplier directory
+    match /vendors/{vendorId} {
+      allow read: if isActiveUser();
+      allow create, update: if isActiveUser() && hasPerm('manage_vendors', isPurchasing() || isGM());
+      allow delete: if isAdminOrGM();
     }
 
     match /settings/{settingId} {
