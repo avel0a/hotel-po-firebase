@@ -9,7 +9,8 @@ import {
     DEFAULT_UNIT_MULTIPLIERS, DEFAULT_HOTEL_SETTINGS, COMMITTED_STATUSES,
     getUnitConversionFactor, isPurchaseRequest, normalizeRole,
     safeCsvCell, formatMoney, roundQty,
-    computeRequestTotals, computeBudgetImpact, computePriceChangePct
+    computeRequestTotals, computeBudgetImpact, computePriceChangePct,
+    saveBlobFile, saveJsPdfDocument
 } from './config.js';
 import {
     signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut,
@@ -35,14 +36,14 @@ import {
     renderRestorePreview, updateAdminBackupReminder,
     renderVendorsTable, showVendorModal, hideVendorModal,
     showStocktakeModal, hideStocktakeModal
-} from './ui.js?v=3.5';
+} from './ui.js?v=3.6';
 import {
     BACKUP_COLLECTIONS, BACKUP_PLAIN_FORMAT,
     serializeFirestoreValue, deserializeFirestoreValue,
     encryptBackupPayload, decryptBackupPayload,
     isEncryptedBackupEnvelope, validateBackupDataset, sha256Hex,
     uploadEncryptedBackupToCloudinary
-} from './backup.js?v=3.5';
+} from './backup.js?v=3.6';
 
 /** Internal sentinel error to abort transactions cleanly with user-facing validation feedback. */
 class ValidationError extends Error {
@@ -1839,7 +1840,7 @@ export async function downloadReportPdf() {
         }
 
         const safeName = cfg.hotelName.replace(/[^a-z0-9]/gi, '_');
-        pdf.save(`${safeName}_Report_${new Date().toISOString().split('T')[0]}.pdf`);
+        saveJsPdfDocument(pdf, `${safeName}_Report_${new Date().toISOString().split('T')[0]}.pdf`);
         showNotification("PDF downloaded successfully!");
     } catch (err) {
         console.error('PDF generation or save failed:', err);
@@ -2011,7 +2012,7 @@ export function downloadRequestVoucherPdf(requestId) {
         pdf.text(`${cfg.footerNote} — Generated ${new Date().toLocaleString()}`, pageWidth / 2, pdf.internal.pageSize.getHeight() - 8, { align: 'center' });
 
         const prefix = isPO ? 'PO' : 'Requisition_Slip';
-        pdf.save(`${prefix}_${req.id.substring(0, 8)}.pdf`);
+        saveJsPdfDocument(pdf, `${prefix}_${req.id.substring(0, 8)}.pdf`);
         showNotification(`${isPO ? 'Purchase Order' : 'Requisition Slip'} PDF downloaded!`);
     } catch (err) {
         console.error('Voucher PDF error:', err);
@@ -2136,7 +2137,7 @@ export function downloadGrnPdf(requestId) {
         pdf.setTextColor(150);
         pdf.text(`${cfg.footerNote} — GRN Generated ${new Date().toLocaleString()}`, pageWidth / 2, pdf.internal.pageSize.getHeight() - 8, { align: 'center' });
 
-        pdf.save(`GRN_${req.id.substring(0, 8)}.pdf`);
+        saveJsPdfDocument(pdf, `GRN_${req.id.substring(0, 8)}.pdf`);
         showNotification("Goods Received Note (GRN) PDF downloaded!");
     } catch (err) {
         console.error('GRN PDF error:', err);
@@ -2187,14 +2188,7 @@ export function downloadReportCsv() {
 
         const csvContent = [headers.join(','), ...rows].join('\n');
         const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `Hotel_PO_Report_${new Date().toISOString().split('T')[0]}.csv`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
+        saveBlobFile(blob, `Hotel_PO_Report_${new Date().toISOString().split('T')[0]}.csv`, 'text/csv;charset=utf-8;');
         showNotification("CSV report downloaded successfully!");
     } catch (err) {
         console.error('CSV generation failed:', err);
@@ -2770,14 +2764,7 @@ export async function loadMoreStockMovements({ loadAll = false, silent = false }
 function triggerBrowserJsonDownload(obj, filename) {
     const jsonString = JSON.stringify(obj, null, 2);
     const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    saveBlobFile(blob, filename, 'application/json;charset=utf-8');
     return jsonString.length;
 }
 
@@ -3354,7 +3341,7 @@ export function downloadStocktakeSheetPdf() {
             pdf.text(lbl, (x1 + x2) / 2, sigY + 5, { align: 'center' });
         });
 
-        pdf.save(`Stocktake_Sheet_${(catFilter || 'All').replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`);
+        saveJsPdfDocument(pdf, `Stocktake_Sheet_${(catFilter || 'All').replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`);
         showNotification("Physical Stocktake Count Sheet PDF downloaded!");
     } catch (err) {
         console.error('Stocktake PDF error:', err);

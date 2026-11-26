@@ -1,0 +1,11 @@
+{
+  "appId": "com.hotelpo.app",
+  "appName": "Hotel PO System",
+  "webDir": "public",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "hotel-po-firebase-v2",
+  "version": "3.6.0",
+  "description": "A full-featured **Hotel Procurement, Inventory, & Requisition Management** web application built for hotel operations, powered by **Firebase** (Authentication, Firestore, Cloud Functions, Hosting).",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/avel0a/hotel-po-firebase.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/avel0a/hotel-po-firebase/issues"
+  },
+  "homepage": "https://github.com/avel0a/hotel-po-firebase#readme",
+  "dependencies": {
+    "@capacitor/android": "^8.6.3",
+    "@capacitor/cli": "^8.6.3",
+    "@capacitor/core": "^8.6.3"
+  }
+}

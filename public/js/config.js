@@ -308,3 +308,46 @@ export function computePriceChangePct(prevPrice, newBasePrice) {
     return roundQty(((next - prev) / prev) * 100, 1);
 }
 
+/**
+ * Saves a Blob download across standard browsers and the Capacitor Android APK WebView.
+ * Uses window.AndroidFileBridge.saveFile(base64, filename, mimeType) when present in APK mode.
+ */
+export function saveBlobFile(blob, filename, mimeType = '') {
+    const safeName = String(filename || 'download').replace(/[\\/:*?"<>|]/g, '_');
+    const resolvedMime = mimeType || blob?.type || 'application/octet-stream';
+
+    if (typeof window !== 'undefined' && window.AndroidFileBridge && typeof window.AndroidFileBridge.saveFile === 'function') {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            const result = typeof reader.result === 'string' ? reader.result : '';
+            const commaIdx = result.indexOf(',');
+            const base64 = commaIdx >= 0 ? result.slice(commaIdx + 1) : result;
+            window.AndroidFileBridge.saveFile(base64, safeName, resolvedMime);
+        };
+        reader.readAsDataURL(blob);
+        return 'android';
+    }
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = safeName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return 'browser';
+}
+
+/**
+ * Exports a jsPDF document cleanly in both browsers and Android APK WebView.
+ */
+export function saveJsPdfDocument(pdf, filename) {
+    const safeName = String(filename || 'document.pdf').replace(/[\\/:*?"<>|]/g, '_');
+    if (typeof window !== 'undefined' && window.AndroidFileBridge && typeof window.AndroidFileBridge.saveFile === 'function') {
+        return saveBlobFile(pdf.output('blob'), safeName, 'application/pdf');
+    }
+    pdf.save(safeName);
+    return 'browser';
+}
+

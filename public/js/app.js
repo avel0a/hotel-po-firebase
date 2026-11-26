@@ -9,7 +9,7 @@ import { DEPARTMENTS, debounce } from './config.js';
 import {
     loadTheme, showSection, showNotification, toggleTheme,
     addRequestItemRow, updateTotalCost, updateItemSubtotal,
-    populateItemNameDatalist, showItemModal, hideItemModal,
+    populateItemNameDatalist, showItemModal, hideItemModal, hideConfirmModal,
     hideRequestDetailsModal, showRequestDetailsModal,
     showUserModal, hideUserModal, renderUsersTable,
     renderDashboard, renderInventory, renderMyRequests,
@@ -25,7 +25,7 @@ import {
     refreshDepartmentSelects, renderDepartmentsList, renderPermissionsMatrix,
     handleItemRowNameChange, handleItemRowUnitChange, renderNotificationBell, updateSidebarBadges, toggleNotificationDropdown,
     renderStoreOperations
-} from './ui.js?v=3.5';
+} from './ui.js?v=3.6';
 import {
     handleLogin, handleForgotPassword, handleLogout, handleCreateUser,
     handleEditUser, handleSaveUserEdit, handleResetUserPassword, handleDeleteUser,
@@ -42,8 +42,8 @@ import {
     handleExecuteRestore, handleCancelRestore,
     handleSaveVendor, handleEditVendor, handleDeleteVendor,
     downloadStocktakeSheetPdf, handlePostStocktakeAdjustments
-} from './actions.js?v=3.5';
-import { initializeFirebase } from './auth.js?v=3.5';
+} from './actions.js?v=3.6';
+import { initializeFirebase } from './auth.js?v=3.6';
 
 // ============================================================================
 // DOM Content Loaded — Wire everything up
@@ -752,4 +752,51 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
     });
+
+    // Expose Android hardware/gesture Back navigation hook for MainActivity
+    const modalClosers = {
+        'confirm-modal': hideConfirmModal,
+        'item-modal': hideItemModal,
+        'receive-modal': hideReceiveModal,
+        'issue-modal': hideIssueModal,
+        'issue-requisition-modal': hideIssueRequisitionModal,
+        'order-po-modal': hideOrderPOModal,
+        'receive-goods-modal': hideReceiveGoodsModal,
+        'stock-log-modal': hideStockLogModal,
+        'stock-reconciliation-modal': hideStockReconciliationModal,
+        'stocktake-modal': hideStocktakeModal,
+        'vendor-modal': hideVendorModal,
+        'user-modal': hideUserModal,
+        'request-details-modal': hideRequestDetailsModal
+    };
+
+    window.handleAndroidBack = () => {
+        const notifDropdown = document.getElementById('notification-dropdown');
+        if (notifDropdown && !notifDropdown.classList.contains('hidden')) {
+            toggleNotificationDropdown(false);
+            return true;
+        }
+        const openModalId = Object.keys(modalClosers).find(id => {
+            const el = document.getElementById(id);
+            return el && !el.classList.contains('hidden');
+        });
+        if (openModalId) {
+            modalClosers[openModalId]();
+            return true;
+        }
+        const openSidebar = document.querySelector('.sidebar.open');
+        if (openSidebar) {
+            openSidebar.classList.remove('open');
+            return true;
+        }
+        const appContainer = document.getElementById('app-container');
+        const isLoggedIn = appContainer && !appContainer.classList.contains('hidden');
+        const activeSection = Array.from(document.querySelectorAll('.section-content'))
+            .find(s => !s.classList.contains('hidden'));
+        if (isLoggedIn && activeSection && activeSection.id !== 'dashboard') {
+            showSection('dashboard');
+            return true;
+        }
+        return false;
+    };
 });

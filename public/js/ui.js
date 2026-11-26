@@ -10,7 +10,8 @@ import {
     UNITS, PAYMENT_TERMS, INVENTORY_CATEGORIES, DEFAULT_UNIT_MULTIPLIERS, DEFAULT_HOTEL_SETTINGS, COMMITTED_STATUSES,
     getUnitConversionFactor, isPurchaseRequest, normalizeRole,
     escapeHtml, safeCsvCell, formatMoney, roundQty,
-    computeRequestTotals, computeBudgetImpact, computePriceChangePct
+    computeRequestTotals, computeBudgetImpact, computePriceChangePct,
+    saveBlobFile
 } from './config.js';
 
 export function getHotelSettings() {
@@ -3481,14 +3482,7 @@ export function downloadStockReconciliationCsv() {
 
         const csvContent = [headers.join(','), ...rows].join('\n');
         const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `Stock_Reconciliation_Report_${new Date().toISOString().split('T')[0]}.csv`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
+        saveBlobFile(blob, `Stock_Reconciliation_Report_${new Date().toISOString().split('T')[0]}.csv`, 'text/csv;charset=utf-8;');
         showNotification("Stock reconciliation report downloaded successfully!");
     } catch (err) {
         console.error('Reconciliation export failed:', err);

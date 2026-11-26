@@ -1,0 +1,17 @@
+{
+  "name": "Hotel Purchase Order System",
+  "short_name": "Hotel PO",
+  "description": "Hotel Procurement, Inventory, & Requisition Management System",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1a365d",
+  "theme_color": "#1a365d",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -110,13 +110,13 @@ assert.ok(COMMITTED_STATUSES.includes('Received'));
 assert.ok(COMMITTED_STATUSES.includes('Issued'));
 console.log('✓ Role normalization & workflow status checks passed');
 
-// 5. Verify cache-buster consistency (?v=3.5) across entry points and Firestore rules
+// 5. Verify cache-buster consistency (?v=3.6) across entry points and Firestore rules
 const indexHtml = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
-assert.ok(indexHtml.includes('/css/styles.css?v=3.5'), 'index.html missing styles.css?v=3.5');
-assert.ok(indexHtml.includes('/js/app.js?v=3.5'), 'index.html missing app.js?v=3.5');
+assert.ok(indexHtml.includes('/css/styles.css?v=3.6'), 'index.html missing styles.css?v=3.6');
+assert.ok(indexHtml.includes('/js/app.js?v=3.6'), 'index.html missing app.js?v=3.6');
 for (const entry of ['app.js', 'auth.js', 'actions.js']) {
     const src = fs.readFileSync(path.join(rootDir, 'public', 'js', entry), 'utf8');
-    assert.ok(src.includes('?v=3.5'), `${entry} missing ?v=3.5 cache-buster`);
+    assert.ok(src.includes('?v=3.6'), `${entry} missing ?v=3.6 cache-buster`);
 }
 const rulesSrc = fs.readFileSync(path.join(rootDir, 'firestore.rules'), 'utf8');
 assert.ok(
@@ -125,7 +125,7 @@ assert.ok(
 );
 assert.ok(rulesSrc.includes('match /vendors/{vendorId}'), 'firestore.rules missing /vendors collection rules');
 assert.ok(BACKUP_COLLECTIONS.includes('vendors'), 'BACKUP_COLLECTIONS must include vendors');
-console.log('✓ Cache-buster (?v=3.5) & Firestore rule safety checks passed');
+console.log('✓ Cache-buster (?v=3.6) & Firestore rule safety checks passed');
 
 // 6. Backup serialization, Web Crypto AES-256-GCM encryption & Cloudinary safety policy
 class MockTimestamp {
@@ -231,3 +231,42 @@ assert.equal(computePriceChangePct(100, 115), 15);
 assert.equal(computePriceChangePct(200, 180), -10);
 assert.equal(computePriceChangePct(0, 100), null);
 console.log('✓ Tax/Discount totals, Budget Overrun guard & Price Variance checks passed');
+
+// 8. Native Android File Bridge & Browser fallback download checks
+const { saveBlobFile, saveJsPdfDocument } = await import('../public/js/config.js');
+const prevWindow = globalThis.window;
+try {
+    let bridged = null;
+    globalThis.window = {
+        AndroidFileBridge: {
+            saveFile: (base64, filename, mimeType) => {
+                bridged = { base64, filename, mimeType };
+            }
+        }
+    };
+    const origFileReader = globalThis.FileReader;
+    globalThis.FileReader = class MockFileReader {
+        readAsDataURL() {
+            this.result = 'data:application/pdf;base64,JVBERi0xLjQ=';
+            if (this.onloadend) this.onloadend();
+        }
+    };
+    try {
+        const resPdf = saveJsPdfDocument({ output: () => ({ type: 'application/pdf' }), save: () => { throw new Error('Should not call pdf.save inside APK'); } }, 'PO:123/test.pdf');
+        assert.equal(resPdf, 'android');
+        assert.deepEqual(bridged, { base64: 'JVBERi0xLjQ=', filename: 'PO_123_test.pdf', mimeType: 'application/pdf' });
+    } finally {
+        globalThis.FileReader = origFileReader;
+    }
+
+    let browserSavedName = null;
+    globalThis.window = {};
+    const resFallback = saveJsPdfDocument({ save: (name) => { browserSavedName = name; } }, 'GRN_001.pdf');
+    assert.equal(resFallback, 'browser');
+    assert.equal(browserSavedName, 'GRN_001.pdf');
+    assert.equal(typeof saveBlobFile, 'function');
+} finally {
+    if (prevWindow === undefined) delete globalThis.window;
+    else globalThis.window = prevWindow;
+}
+console.log('✓ Android File Bridge & browser download fallback checks passed');
